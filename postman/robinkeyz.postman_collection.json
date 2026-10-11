@@ -1,0 +1,487 @@
+{
+  "info": {
+    "name": "RobinKeyz LLC — Backend API",
+    "description": "NestJS + Prisma + PostgreSQL backend.\n\n**Base URL:** http://localhost:7000\n**API prefix:** /api/v1 (the root `/` route is excluded from the prefix)\n\n### Validation rules\nThe global ValidationPipe uses `whitelist: true` and `forbidNonWhitelisted: true`, so any field that is not in the DTO returns **400**.\n\n### Variables\nEdit them under the collection's **Variables** tab.\n- `baseUrl` — server address\n- `apiUrl` — `{{baseUrl}}/api/v1`",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:7000",
+      "type": "string"
+    },
+    {
+      "key": "apiUrl",
+      "value": "{{baseUrl}}/api/v1",
+      "type": "string"
+    },
+    {
+      "key": "randomEmail",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "createdUserId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "duplicateEmail",
+      "value": "sayed.duplicate@example.com",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "description": "Checks that the server is alive.",
+      "item": [
+        {
+          "name": "Root — API Server Running",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/",
+              "host": ["{{baseUrl}}"],
+              "path": [""]
+            },
+            "description": "Returns the HTML status page.\n\nThis route sits at the bare `/`, not under `/api/v1`, because `main.ts` excludes it from the global prefix.\n\n**Expected:** 200 with HTML."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "pm.test('HTML page is returned', () => {",
+                  "  pm.expect(pm.response.text()).to.include('API Server Running');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "description": "User registration.\n\n**Note:** `role` is accepted by the DTO but `usersService.register()` does not pass it to Prisma, so every new user is created with the schema default `user`. The response also omits `role`.",
+      "item": [
+        {
+          "name": "Register User (success)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh email each run, so the request never hits the 409 conflict.",
+                  "pm.collectionVariables.set('randomEmail', 'sayed' + Date.now() + '@example.com');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('User object is returned', () => {",
+                  "  pm.expect(body.user).to.have.property('id');",
+                  "  pm.expect(body.user).to.have.property('email');",
+                  "});",
+                  "pm.test('Password is not exposed', () => {",
+                  "  pm.expect(body.user).to.not.have.property('password');",
+                  "});",
+                  "",
+                  "if (body.user && body.user.id) {",
+                  "  pm.collectionVariables.set('createdUserId', body.user.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Abu Sayed\",\n  \"email\": \"{{randomEmail}}\",\n  \"phone\": \"01712345678\",\n  \"password\": \"secret123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{apiUrl}}/users/register",
+              "host": ["{{apiUrl}}"],
+              "path": ["users", "register"]
+            },
+            "description": "Creates a user. The password is hashed with bcrypt before it is stored.\n\n**Fields**\n| Field | Type | Required | Rule |\n|---|---|---|---|\n| `name` | string | yes | not empty |\n| `email` | string | yes | valid email, unique |\n| `phone` | string | yes | any string |\n| `password` | string | yes | at least 6 characters |\n| `role` | `user` \\| `admin` | no | currently ignored by the service |\n\n**Expected:** 201 with the new user (no password field)."
+          },
+          "response": []
+        },
+        {
+          "name": "Register User (with role)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('randomEmail', 'admin' + Date.now() + '@example.com');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Rashedul Islam\",\n  \"email\": \"{{randomEmail}}\",\n  \"phone\": \"01812345678\",\n  \"password\": \"admin12345\",\n  \"role\": \"admin\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{apiUrl}}/users/register",
+              "host": ["{{apiUrl}}"],
+              "path": ["users", "register"]
+            },
+            "description": "`role` passes validation (it is in the DTO as an optional enum), but `usersService.register()` destructures only email, name, password and phone — so the user is still saved with role `user`.\n\nTo make this actually work, pass `role` through to `prisma.user.create()` in `user.service.ts`.\n\n**Expected:** 201."
+          },
+          "response": []
+        },
+        {
+          "name": "Register — Duplicate Email (409)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Duplicate Test\",\n  \"email\": \"{{duplicateEmail}}\",\n  \"phone\": \"01911111111\",\n  \"password\": \"secret123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{apiUrl}}/users/register",
+              "host": ["{{apiUrl}}"],
+              "path": ["users", "register"]
+            },
+            "description": "Send this **twice**.\n\n- 1st time → 201 Created\n- 2nd time → 409 Conflict, `User with this email already exists`"
+          },
+          "response": []
+        },
+        {
+          "name": "Register — Invalid Email (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Bad Email\",\n  \"email\": \"not-an-email\",\n  \"phone\": \"01712345678\",\n  \"password\": \"secret123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{apiUrl}}/users/register",
+              "host": ["{{apiUrl}}"],
+              "path": ["users", "register"]
+            },
+            "description": "`@IsEmail()` rejects it.\n\n**Expected:** 400 — `email must be an email`."
+          },
+          "response": []
+        },
+        {
+          "name": "Register — Short Password (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Short Pass\",\n  \"email\": \"shortpass@example.com\",\n  \"phone\": \"01712345678\",\n  \"password\": \"123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{apiUrl}}/users/register",
+              "host": ["{{apiUrl}}"],
+              "path": ["users", "register"]
+            },
+            "description": "`@MinLength(6)` rejects it.\n\n**Expected:** 400 — `password must be longer than or equal to 6 characters`."
+          },
+          "response": []
+        },
+        {
+          "name": "Register — Unknown Field (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Extra Field\",\n  \"email\": \"extra@example.com\",\n  \"phone\": \"01712345678\",\n  \"password\": \"secret123\",\n  \"age\": 25\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{apiUrl}}/users/register",
+              "host": ["{{apiUrl}}"],
+              "path": ["users", "register"]
+            },
+            "description": "`age` is not in the DTO. Because `forbidNonWhitelisted: true` is set in `main.ts`, the whole request is rejected instead of the field being dropped.\n\n**Expected:** 400 — `property age should not exist`."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Management",
+      "description": "Static content blocks: about, terms, privacy.\n\n`type` is unique in the database and the service uses **upsert** — sending the same `type` twice updates the existing row instead of creating a second one.",
+      "item": [
+        {
+          "name": "Create / Update — About",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('success is true', () => pm.expect(body.success).to.eql(true));",
+                  "pm.test('type is about', () => pm.expect(body.data.type).to.eql('about'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"about\",\n  \"description\": \"RobinKeyz LLC is a software company based in Dhaka, Bangladesh. We build web and mobile applications for clients around the world.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{apiUrl}}/management/create",
+              "host": ["{{apiUrl}}"],
+              "path": ["management", "create"]
+            },
+            "description": "**Fields**\n| Field | Type | Required | Rule |\n|---|---|---|---|\n| `type` | string | yes | one of `about`, `terms`, `privacy` |\n| `description` | string | yes | not empty |\n\n**Expected:** HTTP 200.\n\nThe controller is decorated with `@HttpCode(HttpStatus.CREATED)`, but it writes the response through `@Res()` and `sendResponse(res, { statusCode: 200 })`, so the status that actually reaches the client is **200**, not 201."
+          },
+          "response": []
+        },
+        {
+          "name": "Create / Update — Terms",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"terms\",\n  \"description\": \"By using this service you agree to our terms and conditions. You must be at least 18 years old. Accounts found violating these terms may be suspended without notice.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{apiUrl}}/management/create",
+              "host": ["{{apiUrl}}"],
+              "path": ["management", "create"]
+            },
+            "description": "**Expected:** 200."
+          },
+          "response": []
+        },
+        {
+          "name": "Create / Update — Privacy",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"privacy\",\n  \"description\": \"We collect only the data required to operate this service: your name, email and phone number. We never sell your data to third parties.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{apiUrl}}/management/create",
+              "host": ["{{apiUrl}}"],
+              "path": ["management", "create"]
+            },
+            "description": "**Expected:** 200."
+          },
+          "response": []
+        },
+        {
+          "name": "Create — Invalid Type (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"contact\",\n  \"description\": \"This should fail because contact is not an allowed type.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{apiUrl}}/management/create",
+              "host": ["{{apiUrl}}"],
+              "path": ["management", "create"]
+            },
+            "description": "`@IsIn(['about', 'terms', 'privacy'])` rejects it.\n\n**Expected:** 400 — `Type must be one of: about, terms, privacy`."
+          },
+          "response": []
+        },
+        {
+          "name": "Get All Management",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('data is an array', () => pm.expect(body.data).to.be.an('array'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiUrl}}/management",
+              "host": ["{{apiUrl}}"],
+              "path": ["management"]
+            },
+            "description": "Returns every management row as an array.\n\n**Expected:** 200 with `data: [...]`."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Management by Type",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                  "",
+                  "const body = pm.response.json();",
+                  "pm.test('a single object is returned', () => {",
+                  "  pm.expect(body.data).to.not.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{apiUrl}}/management?type=about",
+              "host": ["{{apiUrl}}"],
+              "path": ["management"],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "about",
+                  "description": "about | terms | privacy"
+                }
+              ]
+            },
+            "description": "With `?type=` the service calls `findUnique` and returns a **single object** instead of an array.\n\nIf the type does not exist yet, `data` is `null` and the status is still 200.\n\n**Expected:** 200 with `data: { ... }`."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

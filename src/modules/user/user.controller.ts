@@ -13,10 +13,12 @@ import {
 import type { Response } from 'express';
 import { sendResponse } from 'src/utils/sendResponse';
 import { Auth } from '../../common/decorators/auth.decorator';
+import { BearerToken } from '../../common/decorators/bearer-token.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { TAuthUser } from '../../interface/auth.interface';
 import { role } from '../../utils/role';
 import { createUserDto } from './dto/create-user.dto';
+import { verifyEmailDto } from './dto/verify-email.dto';
 import { usersService } from './user.service';
 
 @Controller('users')
@@ -29,7 +31,34 @@ export class usersController {
     sendResponse(res, {
       statusCode: HttpStatus.CREATED,
       success: true,
-      message: 'User registered successfully',
+      message:
+        'An OTP has been sent to your email. Please verify it to complete registration.',
+      data: data,
+    });
+  }
+
+  @Post('verify-email-otp')
+  async verifyEmailOtp(
+    @Res() res: Response,
+    @Body() payload: verifyEmailDto,
+    @BearerToken() token: string,
+  ) {
+    const data = await this.usersService.verifyEmailOtpDB(payload, token);
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'Email verified successfully. You can log in now.',
+      data: data,
+    });
+  }
+
+  @Post('resend-email-otp')
+  async resendEmailOtp(@Res() res: Response, @BearerToken() token: string) {
+    const data = await this.usersService.resendEmailOtpDB(token);
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'A new OTP has been sent to your email.',
       data: data,
     });
   }

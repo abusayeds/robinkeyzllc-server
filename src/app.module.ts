@@ -6,6 +6,8 @@ import { AppController } from './app.controller';
 import { usersModule } from './modules/user/user.module';
 import { managementModel } from './modules/management/management.model';
 import { authModule } from './modules/auth/auth.module';
+import { SeedModule } from './seed/seed.module';
+import { OtpModule } from './common/otp/otp.module';
 
 @Module({
   imports: [
@@ -14,9 +16,11 @@ import { authModule } from './modules/auth/auth.module';
       envFilePath: '.env',
     }),
     PrismaModule,
+    OtpModule,
     usersModule,
     managementModel,
-    authModule
+    authModule,
+    SeedModule,
   ],
   controllers: [AppController],
 })

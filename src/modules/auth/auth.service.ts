@@ -4,8 +4,12 @@ import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppError } from '../../common/errors/appError';
+import { OTP_PURPOSE, OtpService } from '../../common/otp/otp.service';
 import { TAuthUser, TJwtUser } from '../../interface/auth.interface';
-import { generateOTP, sendForgotPasswordOtpEmail } from '../../utils/sendEmail';
+import {
+  sendForgotPasswordOtpEmail,
+  sendInBackground,
+} from '../../utils/sendEmail';
 import {
   changePasswordDto,
   forgotPasswordDto,
@@ -14,14 +18,13 @@ import {
 } from './dto/auth.dto';
 import { loginUserDto } from './dto/login-user.dto';
 
-const OTP_VALID_MINUTES = 10;
-
 @Injectable()
 export class authService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly config: ConfigService,
+    private readonly otpService: OtpService,
   ) {}
 
   async login(payload: loginUserDto) {
@@ -38,6 +41,14 @@ export class authService {
     const isPasswordMatched = await bcrypt.compare(password, user.password);
     if (!isPasswordMatched) {
       throw new AppError(HttpStatus.UNAUTHORIZED, 'Invalid credentials');
+    }
+
+    // Said only after the password checks out, so it leaks nothing.
+    if (!user.isEmailVerified) {
+      throw new AppError(
+        HttpStatus.FORBIDDEN,
+        'Please verify your email before logging in.',
+      );
     }
 
     const jwtUser: TJwtUser = {
@@ -72,53 +83,66 @@ export class authService {
   async forgotPassword(payload: forgotPasswordDto) {
     const { email } = payload;
 
+    // Unverified accounts are rejected here, so a single email can never have
+    // a registration OTP and a reset OTP pending at the same time.
     const user = await this.prisma.user.findUnique({ where: { email } });
-    if (!user || user.isDeleted) {
+    if (!user || user.isDeleted || !user.isEmailVerified) {
       throw new AppError(HttpStatus.NOT_FOUND, 'This account does not exist.');
     }
 
-    await this.issueOtp(email);
+    const otp = await this.otpService.issue(email);
+    const token = await this.otpService.signToken(email, OTP_PURPOSE.forgot);
 
-    const token = await this.signPurposeToken(email, 'forgot');
+    sendInBackground(
+      () => sendForgotPasswordOtpEmail(otp, email),
+      `password reset OTP to ${email}`,
+    );
+
     return { token };
   }
 
   async verifyForgotPasswordOtp(payload: verifyOtpDto, rawToken: string) {
-    const email = await this.readPurposeToken(rawToken, 'forgot');
+    const email = await this.otpService.readToken(
+      rawToken,
+      OTP_PURPOSE.forgot,
+    );
 
-    const otpRecord = await this.prisma.otp.findUnique({ where: { email } });
-    if (!otpRecord) {
-      throw new AppError(HttpStatus.NOT_FOUND, 'OTP not found!');
-    }
-    if (otpRecord.expiresAt < new Date()) {
-      throw new AppError(HttpStatus.BAD_REQUEST, 'OTP has expired');
-    }
-    if (otpRecord.otp !== payload.otp) {
-      throw new AppError(HttpStatus.BAD_REQUEST, 'Wrong OTP');
-    }
+    await this.otpService.verify(email, payload.otp);
 
-    await this.prisma.otp.delete({ where: { email } });
-
-    const token = await this.signPurposeToken(email, 'verifyForgot');
+    const token = await this.otpService.signToken(
+      email,
+      OTP_PURPOSE.verifyForgot,
+    );
     return { token };
   }
 
   async resendOtp(rawToken: string) {
-    const email = await this.readPurposeToken(rawToken, 'forgot');
+    const email = await this.otpService.readToken(
+      rawToken,
+      OTP_PURPOSE.forgot,
+    );
 
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (!user || user.isDeleted) {
       throw new AppError(HttpStatus.NOT_FOUND, 'This account does not exist.');
     }
 
-    await this.issueOtp(email);
+    const otp = await this.otpService.issue(email);
+    const token = await this.otpService.signToken(email, OTP_PURPOSE.forgot);
 
-    const token = await this.signPurposeToken(email, 'forgot');
+    sendInBackground(
+      () => sendForgotPasswordOtpEmail(otp, email),
+      `password reset OTP to ${email}`,
+    );
+
     return { token };
   }
 
   async resetPassword(payload: resetPasswordDto, rawToken: string) {
-    const email = await this.readPurposeToken(rawToken, 'verifyForgot');
+    const email = await this.otpService.readToken(
+      rawToken,
+      OTP_PURPOSE.verifyForgot,
+    );
 
     if (payload.password !== payload.confirmPassword) {
       throw new AppError(HttpStatus.BAD_REQUEST, 'Passwords do not match');
@@ -174,44 +198,5 @@ export class authService {
     });
 
     return null;
-  }
-
-  private async issueOtp(email: string) {
-    const otp = generateOTP();
-    const expiresAt = new Date(Date.now() + OTP_VALID_MINUTES * 60 * 1000);
-
-    await this.prisma.otp.upsert({
-      where: { email },
-      update: { otp, expiresAt },
-      create: { email, otp, expiresAt },
-    });
-
-    await sendForgotPasswordOtpEmail(otp, email);
-  }
-
-  private async signPurposeToken(email: string, purpose: string) {
-    return this.jwtService.signAsync(
-      { email, purpose },
-      { expiresIn: '10m' as JwtSignOptions['expiresIn'] },
-    );
-  }
-
-  // Each step of the forget-password flow issues a token for the next step
-  // only, so a "forgot" token cannot be used to reset a password.
-  private async readPurposeToken(
-    rawToken: string,
-    expectedPurpose: string,
-  ): Promise<string> {
-    let decoded: { email?: string; purpose?: string };
-    try {
-      decoded = await this.jwtService.verifyAsync(rawToken);
-    } catch {
-      throw new AppError(HttpStatus.UNAUTHORIZED, 'Invalid or expired token');
-    }
-
-    if (!decoded?.email || decoded.purpose !== expectedPurpose) {
-      throw new AppError(HttpStatus.UNAUTHORIZED, 'Invalid token');
-    }
-    return decoded.email;
   }
 }

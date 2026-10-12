@@ -10,11 +10,13 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 model User { 
-   id        Int      @id @default(autoincrement())
+  id        Int      @id @default(autoincrement())
   email     String   @unique
   name      String
   phone     String
   password  String
+  isDeleted boolean
+  isEmailVerified  boolean
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

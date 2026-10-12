@@ -1,0 +1,299 @@
+{
+  "info": {
+    "name": "RobinKeyz — User",
+    "description": "Registration, profile and the admin user list.\n\n### Setup\nSelect the **RobinKeyz — Local** environment, then send **Login** from the *RobinKeyz — Auth* collection once. That saves `accessToken` to the environment and every request here picks it up.\n\n### Validation\nThe global ValidationPipe uses `whitelist` and `forbidNonWhitelisted`, so any field that is not in the DTO returns **400**.\n\n### Who can call what\n| Route | Allowed |\n|---|---|\n| `POST /users/register` | anyone |\n| `GET /users/me` | any logged-in user |\n| `GET /users/all-user` | admin |\n| `GET /users/:id` | admin, user |\n| `DELETE /users/:id` | admin |",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "Register",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// A fresh email each run, so this never hits the 409 conflict.",
+              "pm.environment.set('newUserEmail', 'sayed' + Date.now() + '@example.com');"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+              "",
+              "const body = pm.response.json();",
+              "",
+              "pm.test('User is returned', () => {",
+              "  pm.expect(body.data).to.have.property('id');",
+              "  pm.expect(body.data.role).to.eql('user');",
+              "});",
+              "",
+              "pm.test('Password is not exposed', () => {",
+              "  pm.expect(body.data).to.not.have.property('password');",
+              "});",
+              "",
+              "// Saved so Get Single User and Delete User can reuse it.",
+              "if (body.data && body.data.id) {",
+              "  pm.environment.set('userId', body.data.id);",
+              "  console.log('userId saved:', body.data.id);",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Abu Sayed\",\n  \"email\": \"{{newUserEmail}}\",\n  \"phone\": \"01712345678\",\n  \"password\": \"{{newUserPassword}}\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{apiUrl}}/users/register",
+          "host": ["{{apiUrl}}"],
+          "path": ["users", "register"]
+        },
+        "description": "Creates a user. The password is hashed with bcrypt before it is stored, and `role` is always `user`.\n\nA pre-request script generates a new email each run, so you can send it repeatedly. **Saves `userId` to the environment automatically.**\n\n| Field | Rule |\n|---|---|\n| `name` | not empty |\n| `email` | valid email, unique |\n| `phone` | any string |\n| `password` | at least 6 characters |\n\n**Expected:** 201."
+      },
+      "response": []
+    },
+    {
+      "name": "Register — Duplicate Email (409)",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Duplicate Test\",\n  \"email\": \"{{newUserEmail}}\",\n  \"phone\": \"01911111111\",\n  \"password\": \"secret123\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{apiUrl}}/users/register",
+          "host": ["{{apiUrl}}"],
+          "path": ["users", "register"]
+        },
+        "description": "Reuses the email saved by **Register**, so send that one first.\n\n**Expected:** 409 — `User with this email already exists`."
+      },
+      "response": []
+    },
+    {
+      "name": "Register — Invalid Email (400)",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Bad Email\",\n  \"email\": \"not-an-email\",\n  \"phone\": \"01712345678\",\n  \"password\": \"secret123\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{apiUrl}}/users/register",
+          "host": ["{{apiUrl}}"],
+          "path": ["users", "register"]
+        },
+        "description": "**Expected:** 400 — `email must be an email`."
+      },
+      "response": []
+    },
+    {
+      "name": "Register — Short Password (400)",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Short Pass\",\n  \"email\": \"shortpass@example.com\",\n  \"phone\": \"01712345678\",\n  \"password\": \"123\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{apiUrl}}/users/register",
+          "host": ["{{apiUrl}}"],
+          "path": ["users", "register"]
+        },
+        "description": "**Expected:** 400 — `password must be longer than or equal to 6 characters`."
+      },
+      "response": []
+    },
+    {
+      "name": "Register — Unknown Field (400)",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Extra Field\",\n  \"email\": \"extra@example.com\",\n  \"phone\": \"01712345678\",\n  \"password\": \"secret123\",\n  \"role\": \"admin\"\n}",
+          "options": { "raw": { "language": "json" } }
+        },
+        "url": {
+          "raw": "{{apiUrl}}/users/register",
+          "host": ["{{apiUrl}}"],
+          "path": ["users", "register"]
+        },
+        "description": "`role` is not in the DTO. Because `forbidNonWhitelisted` is on, the whole request is rejected instead of the field being dropped — so nobody can make themselves an admin at signup.\n\n**Expected:** 400 — `property role should not exist`."
+      },
+      "response": []
+    },
+    {
+      "name": "Get My Profile",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('Password is not exposed', () => {",
+              "  pm.expect(pm.response.json().data).to.not.have.property('password');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{apiUrl}}/users/me",
+          "host": ["{{apiUrl}}"],
+          "path": ["users", "me"]
+        },
+        "description": "The logged-in user's own profile, read fresh from the database.\n\n`GET /auth/me` returns the same shape but straight from the guard, without a second query.\n\n**Expected:** 200. Without a token: 401."
+      },
+      "response": []
+    },
+    {
+      "name": "Get All Users (admin)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "",
+              "const body = pm.response.json();",
+              "pm.test('data is an array', () => pm.expect(body.data).to.be.an('array'));",
+              "pm.test('pagination is present', () => {",
+              "  pm.expect(body.pagination).to.have.property('totalItem');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{apiUrl}}/users/all-user?page=1&limit=10",
+          "host": ["{{apiUrl}}"],
+          "path": ["users", "all-user"],
+          "query": [
+            { "key": "page", "value": "1" },
+            { "key": "limit", "value": "10" },
+            {
+              "key": "searchTerm",
+              "value": "sayed",
+              "disabled": true,
+              "description": "Matches name, email or phone. Several words are ANDed."
+            },
+            {
+              "key": "role",
+              "value": "admin",
+              "disabled": true,
+              "description": "Any column name works as a filter: role, isDeleted, isEmailVerified"
+            },
+            {
+              "key": "isDeleted",
+              "value": "false",
+              "disabled": true,
+              "description": "Strings are cast, so true/false and numbers work"
+            },
+            {
+              "key": "sort",
+              "value": "-createdAt",
+              "disabled": true,
+              "description": "Comma separated. A leading - means descending."
+            }
+          ]
+        },
+        "description": "Admin only. Backed by the QueryBuilder, so search, filter, sort and pagination all work together.\n\nThe greyed-out params are examples — tick them in the **Params** tab to try them.\n\nResponse carries a `pagination` block:\n```json\n{ \"totalPage\": 3, \"currentPage\": 1, \"prevPage\": 1, \"nextPage\": 2, \"limit\": 2, \"totalItem\": 6 }\n```\n\n**Expected:** 200. As a non-admin: 403 — `You are not authorized.`"
+      },
+      "response": []
+    },
+    {
+      "name": "Get All Users — search + sort",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{apiUrl}}/users/all-user?searchTerm=sayed&sort=email&limit=5",
+          "host": ["{{apiUrl}}"],
+          "path": ["users", "all-user"],
+          "query": [
+            { "key": "searchTerm", "value": "sayed" },
+            { "key": "sort", "value": "email" },
+            { "key": "limit", "value": "5" }
+          ]
+        },
+        "description": "Searches name, email and phone, sorts by email ascending, five per page.\n\nTry `sort=-email` for descending, or `searchTerm=abu sayed` — each word must match something."
+      },
+      "response": []
+    },
+    {
+      "name": "Get Single User",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{apiUrl}}/users/{{userId}}",
+          "host": ["{{apiUrl}}"],
+          "path": ["users", "{{userId}}"]
+        },
+        "description": "Uses the `userId` saved by **Register**, so send that first or set the variable yourself.\n\nOpen to admin and user.\n\n**Expected:** 200. Unknown or soft-deleted id: 404 — `User not found`."
+      },
+      "response": []
+    },
+    {
+      "name": "Delete User (admin)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+              "pm.test('success is true', () => {",
+              "  pm.expect(pm.response.json().success).to.eql(true);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "{{apiUrl}}/users/{{userId}}",
+          "host": ["{{apiUrl}}"],
+          "path": ["users", "{{userId}}"]
+        },
+        "description": "Soft delete — sets `isDeleted: true`, the row stays in the database.\n\nAfterwards that account cannot log in, and any token it already holds stops working, because both login and AuthGuard check `isDeleted`.\n\n**Expected:** 200.\n\n| Case | Result |\n|---|---|\n| Not an admin | 403 — `You are not authorized.` |\n| Target is an admin | 403 — `Cannot delete a admin account.` |\n| Sent twice | 400 — `User is already deleted.` |\n| Unknown id | 404 — `User not found.` |"
+      },
+      "response": []
+    }
+  ]
+}

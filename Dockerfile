@@ -3,8 +3,10 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
+# Prisma needs these on alpine.
 RUN apk add --no-cache openssl libc6-compat
 
+# Copied before the source so npm ci stays cached when only code changes.
 COPY package*.json ./
 RUN npm ci
 

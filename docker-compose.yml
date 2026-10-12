@@ -1,4 +1,3 @@
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -9,7 +8,7 @@ services:
       POSTGRES_PASSWORD: postgres123
       POSTGRES_DB: robinkeyz
     ports:
-      # Windows-এ PostgreSQL 18 আগে থেকেই 5432 দখল করে আছে, তাই 5433 ব্যবহার করছি
+      # Host port 5433 because a native PostgreSQL already holds 5432.
       - '5433:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data

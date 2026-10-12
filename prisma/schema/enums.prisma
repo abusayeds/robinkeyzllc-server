@@ -1,0 +1,10 @@
+enum Role {
+  user
+  admin
+}
+
+enum ManagementType {
+  about
+  terms
+  privacy
+}

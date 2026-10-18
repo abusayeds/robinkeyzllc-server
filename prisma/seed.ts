@@ -17,7 +17,7 @@ async function seedAdmin() {
     where: { email },
     update: {
       password: hashedPassword,
-      role: Role.admin,
+      role: Role.superAdmin,
       isDeleted: false,
       isEmailVerified: true,
     },
@@ -26,13 +26,13 @@ async function seedAdmin() {
       email,
       phone,
       password: hashedPassword,
-      role: Role.admin,
+      role: Role.superAdmin,
       isEmailVerified: true,
     },
     select: { id: true, name: true, email: true, role: true },
   });
 
-  console.log('Admin seeded:', admin);
+  console.log('Super admin seeded:', admin);
 }
 
 seedAdmin()

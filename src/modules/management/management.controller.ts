@@ -19,7 +19,7 @@ export class managementController {
   constructor(private readonly managementService: managementService) {}
 
   @Post('create')
-  @Auth(role.admin)
+  @Auth(role.superAdmin)
   async managementCreate(
     @Res() res: Response,
     @Body() payload: crateManagementDto,
@@ -45,7 +45,7 @@ export class managementController {
   }
 
   @Get('list')
-  @Auth(role.admin)
+  @Auth(role.superAdmin)
   async managementList(
     @Res() res: Response,
     @Query() query: Record<string, unknown>,

@@ -20,7 +20,7 @@ export class SeedService implements OnApplicationBootstrap {
   private async seedAdmin() {
     try {
       const existingAdmin = await this.prisma.user.findFirst({
-        where: { role: Role.admin, isDeleted: false },
+        where: { role: Role.superAdmin, isDeleted: false },
         select: { email: true },
       });
 
@@ -38,22 +38,22 @@ export class SeedService implements OnApplicationBootstrap {
       // upsert, not create: the email may already belong to a normal user.
       const admin = await this.prisma.user.upsert({
         where: { email },
-        update: { role: Role.admin, isDeleted: false, isEmailVerified: true },
+        update: { role: Role.superAdmin, isDeleted: false, isEmailVerified: true },
         create: {
           name,
           email,
           phone,
           password: hashedPassword,
-          role: Role.admin,
+          role: Role.superAdmin,
           isEmailVerified: true,
         },
         select: { id: true, email: true },
       });
 
-      this.logger.log(`Admin seeded: ${admin.email} (id ${admin.id})`);
+      this.logger.log(`Super admin seeded: ${admin.email} (id ${admin.id})`);
     } catch (error) {
       // Seeding must never stop the server from starting.
-      this.logger.error('Admin seeding failed', error as Error);
+      this.logger.error('Super admin seeding failed', error as Error);
     }
   }
 }

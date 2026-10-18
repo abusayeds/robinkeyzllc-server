@@ -1,6 +1,17 @@
 enum Role {
   user
-  admin
+  superAdmin
+}
+
+enum LeagueRole {
+  commissioner
+  coCommissioner
+  member
+}
+
+enum TeamRole {
+  owner
+  coOwner
 }
 
 enum ManagementType {

@@ -76,7 +76,7 @@ export class usersController {
   }
 
   @Get('all-user')
-  @Auth(role.admin)
+  @Auth(role.superAdmin)
   async getAllUsers(
     @Res() res: Response,
     @Query() query: Record<string, unknown>,
@@ -92,7 +92,7 @@ export class usersController {
   }
 
   @Get(':id')
-  @Auth(role.admin, role.user)
+  @Auth(role.superAdmin, role.user)
   async getSingleUser(
     @Res() res: Response,
     @Param('id', ParseIntPipe) id: number,
@@ -107,7 +107,7 @@ export class usersController {
   }
 
   @Delete(':id')
-  @Auth(role.admin)
+  @Auth(role.superAdmin)
   async deleteUser(
     @Res() res: Response,
     @Param('id', ParseIntPipe) id: number,

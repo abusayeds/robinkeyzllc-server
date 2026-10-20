@@ -44,11 +44,11 @@ export class usersService {
     if (existingUser) {
       await this.prisma.user.update({
         where: { email },
-        data: { name, phone, password: hashedPassword },
+        data: { name, phone: phone ?? '', password: hashedPassword },
       });
     } else {
       await this.prisma.user.create({
-        data: { email, name, phone, password: hashedPassword },
+        data: { email, name, phone: phone ?? '', password: hashedPassword },
       });
     }
 

@@ -1,0 +1,157 @@
+{
+  "info": {
+    "name": "User",
+    "description": "Sign-up, email verification, and user records.\n\n## Sign-up flow\n```\nPOST /users/register          -> { token }      (purpose token, 10 min)\n         |\n         v\nPOST /users/verify-email-otp  (Bearer: that token, body { otp })\n         |\n         v\n   account verified -> POST /auth/login\n```\nA user who has not verified cannot log in: login answers 403 `Please verify your email before logging in.`\n\n## Already-registered emails\nIf the email exists but was never verified, register does **not** fail. It updates the record, sends a fresh OTP and returns a new token, so an abandoned sign-up can simply be restarted. It only returns 409 when the email belongs to a verified account.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Register",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "",
+              "if (body.success && body.data && body.data.token) {",
+              "  pm.collectionVariables.set('verifyEmailToken', body.data.token);",
+              "  console.log('verifyEmailToken saved');",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"robin.keyz\",\n  \"email\": \"newuser@example.com\",\n  \"password\": \"secret123\"\n}"
+        },
+        "url": {
+          "raw": "{{apiUrl}}/users/register",
+          "host": ["{{apiUrl}}"],
+          "path": ["users", "register"]
+        },
+        "description": "Creates the account and emails a 6-digit OTP.\n\n**Body**\n| Field | Type | Required | Notes |\n|---|---|---|---|\n| name | string | yes | the Discord username from the sign-up form |\n| email | string | yes | must be a valid address |\n| password | string | yes | at least 6 characters |\n| phone | string | no | not collected by the Avora sign-up form |\n\n**Returns** — only the token, nothing else:\n```json\n{\n  \"success\": true,\n  \"statusCode\": 201,\n  \"message\": \"An OTP has been sent to your email. Please verify it to complete registration.\",\n  \"data\": { \"token\": \"eyJhbGci...\" }\n}\n```\nHold this token (sessionStorage is a good place) — the next call needs it as a bearer token. It expires in 10 minutes.\n\n**Errors**\n| Status | message |\n|---|---|\n| 409 | User with this email already exists |\n| 400 | validation errors from class-validator |\n\n**Note:** the email is sent *after* the response returns, so this call is fast and never blocks on SMTP. In development the OTP is also printed to the server terminal:\n```\n[OtpService] OTP for newuser@example.com: 123456\n```\n\nThe test script saves the token as `verifyEmailToken`."
+      }
+    },
+    {
+      "name": "Verify email OTP",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{verifyEmailToken}}", "type": "string" }]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"otp\": \"123456\"\n}"
+        },
+        "url": {
+          "raw": "{{apiUrl}}/users/verify-email-otp",
+          "host": ["{{apiUrl}}"],
+          "path": ["users", "verify-email-otp"]
+        },
+        "description": "Confirms the email address and activates the account.\n\n**Auth:** the token from Register — **not** a session token.\n\n**Body:** `{ \"otp\": \"123456\" }` — the OTP is **6 digits**.\n\n**Returns** the created user:\n```json\n{\n  \"data\": {\n    \"id\": 21,\n    \"email\": \"newuser@example.com\",\n    \"name\": \"robin.keyz\",\n    \"phone\": \"\",\n    \"role\": \"user\",\n    \"isDeleted\": false,\n    \"isEmailVerified\": true,\n    \"createdAt\": \"2026-10-19T10:12:00.000Z\",\n    \"updatedAt\": \"2026-10-19T10:14:30.000Z\"\n  }\n}\n```\n\n**Errors**\n| Status | message |\n|---|---|\n| 404 | OTP not found! |\n| 400 | OTP has expired |\n| 400 | Wrong OTP |\n| 400 | Email is already verified. |\n| 401 | Invalid or expired token |\n\nThis does **not** log the user in. Send them to the login screen afterwards."
+      }
+    },
+    {
+      "name": "Resend email OTP",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{verifyEmailToken}}", "type": "string" }]
+        },
+        "url": {
+          "raw": "{{apiUrl}}/users/resend-email-otp",
+          "host": ["{{apiUrl}}"],
+          "path": ["users", "resend-email-otp"]
+        },
+        "description": "Sends a fresh registration OTP. No body.\n\n**Auth:** the token from Register — it stays valid, so reuse the same one.\n\nFor the \"Didn't receive code? Resend\" link.\n\nIf the 10-minute token has expired, call Register again with the same details — the account is unverified, so it is allowed and you get a new token."
+      }
+    },
+    {
+      "name": "My profile",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+        },
+        "url": {
+          "raw": "{{apiUrl}}/users/me",
+          "host": ["{{apiUrl}}"],
+          "path": ["users", "me"]
+        },
+        "description": "The signed-in user's full record.\n\n**Auth:** session token.\n\nSame data as `GET /auth/me`, plus `isDeleted`, `createdAt` and `updatedAt`. Use whichever reads better in your code."
+      }
+    },
+    {
+      "name": "All users (Super Admin)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+        },
+        "url": {
+          "raw": "{{apiUrl}}/users/all-user?page=1&limit=10&searchTerm=&sort=-createdAt",
+          "host": ["{{apiUrl}}"],
+          "path": ["users", "all-user"],
+          "query": [
+            { "key": "page", "value": "1", "description": "1-based page number. Default 1." },
+            { "key": "limit", "value": "10", "description": "Rows per page. Default 10." },
+            { "key": "searchTerm", "value": "", "description": "Partial match across name, email and phone." },
+            { "key": "sort", "value": "-createdAt", "description": "Field name. Prefix with - for descending." },
+            { "key": "role", "value": "user", "description": "Exact-match filter on any column. Remove if not needed.", "disabled": true },
+            { "key": "fields", "value": "id,name,email", "description": "Return only these columns.", "disabled": true }
+          ]
+        },
+        "description": "Paged, searchable user list. **Super Admin only.**\n\n**Auth:** session token of a `superAdmin`. Anyone else gets 403 `You are not authorized.`\n\n**Query parameters**\n| Param | Default | Notes |\n|---|---|---|\n| page | 1 | |\n| limit | 10 | |\n| searchTerm | — | matches name, email or phone; multiple words all have to match |\n| sort | — | `name` ascending, `-name` descending |\n| fields | — | comma separated column list |\n| *anything else* | — | treated as an exact-match filter, e.g. `role=user` |\n\n**Returns** — note `pagination` sits beside `data`, not inside it:\n```json\n{\n  \"success\": true,\n  \"statusCode\": 200,\n  \"message\": \"User list retrieved successfully\",\n  \"pagination\": {\n    \"page\": 1,\n    \"limit\": 10,\n    \"totalItem\": 42,\n    \"totalPage\": 5\n  },\n  \"data\": [ { \"id\": 13, \"name\": \"Admin\", \"...\": \"...\" } ]\n}\n```"
+      }
+    },
+    {
+      "name": "Single user",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+        },
+        "url": {
+          "raw": "{{apiUrl}}/users/13",
+          "host": ["{{apiUrl}}"],
+          "path": ["users", "13"]
+        },
+        "description": "One user by id.\n\n**Auth:** any signed-in user.\n\nThe id must be a whole number — `/users/abc` returns 400 `Validation failed (numeric string is expected)`.\n\n**Errors**\n| Status | message |\n|---|---|\n| 404 | User not found. |"
+      }
+    },
+    {
+      "name": "Delete user (Super Admin)",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+        },
+        "url": {
+          "raw": "{{apiUrl}}/users/16",
+          "host": ["{{apiUrl}}"],
+          "path": ["users", "16"]
+        },
+        "description": "Soft delete — sets `isDeleted = true`. The row stays in the database and the user can no longer sign in.\n\n**Auth:** session token of a `superAdmin`.\n\n**Errors**\n| Status | message |\n|---|---|\n| 404 | User not found. |\n| 400 | User is already deleted. |\n| 403 | Cannot delete a superAdmin account. |\n\nOnly ordinary `user` accounts can be deleted; a Super Admin cannot be removed this way."
+      }
+    }
+  ],
+  "variable": [{ "key": "verifyEmailToken", "value": "" }]
+}

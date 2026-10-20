@@ -1,0 +1,197 @@
+{
+  "info": {
+    "name": "Auth",
+    "description": "Session and password endpoints.\n\n## Response envelope\nEvery endpoint answers with the same wrapper:\n```json\n{ \"success\": true, \"statusCode\": 200, \"message\": \"...\", \"data\": { } }\n```\nRead your payload from `data`. On failure `success` is `false` and `message` holds the text to show the user.\n\n## Tokens\nThere are two kinds of bearer token and they are NOT interchangeable:\n\n| Token | Comes from | Used by |\n|---|---|---|\n| Session token | `POST /auth/login` | every `@Auth()` route |\n| Purpose token | forget-password / register flows | only the next step of that same flow |\n\nA purpose token lasts 10 minutes and works for exactly one flow step. Sending a session token where a purpose token is expected returns 401.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Login",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "",
+              "if (body.success && body.data && body.data.token) {",
+              "  pm.collectionVariables.set('accessToken', body.data.token);",
+              "  pm.environment.set('accessToken', body.data.token);",
+              "  console.log('accessToken saved');",
+              "}",
+              "",
+              "pm.test('login succeeded', function () {",
+              "  pm.expect(body.success).to.eql(true);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"admin@gmail.com\",\n  \"password\": \"1qazxsw2\",\n  \"isRememberMe\": false\n}"
+        },
+        "url": {
+          "raw": "{{apiUrl}}/auth/login",
+          "host": ["{{apiUrl}}"],
+          "path": ["auth", "login"]
+        },
+        "description": "Sign in and receive a session token.\n\n**Body**\n| Field | Type | Required | Notes |\n|---|---|---|---|\n| email | string | yes | |\n| password | string | yes | |\n| isRememberMe | boolean | no | `true` makes the token last 30 days instead of 7 |\n\n**Returns**\n```json\n{\n  \"success\": true,\n  \"statusCode\": 200,\n  \"message\": \"User logged in successfully\",\n  \"data\": {\n    \"token\": \"eyJhbGci...\",\n    \"user\": {\n      \"id\": 13,\n      \"email\": \"admin@gmail.com\",\n      \"name\": \"Admin\",\n      \"phone\": \"\",\n      \"role\": \"superAdmin\",\n      \"isEmailVerified\": true\n    }\n  }\n}\n```\n\n**Errors**\n| Status | message | What to show |\n|---|---|---|\n| 401 | Invalid credentials | Wrong email or password — the same message for both, on purpose, so nobody can discover which emails exist |\n| 403 | Please verify your email before logging in. | Send them to the OTP screen; call `POST /users/resend-email-otp` to get a fresh code |\n\n**Note on `role`:** this is the platform role only — `user` or `superAdmin`. Commissioner and Team Owner are per-league and do not appear here.\n\nThe test script stores `data.token` into the `accessToken` variable, so every protected request below works straight after this one."
+      }
+    },
+    {
+      "name": "Me",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+        },
+        "url": {
+          "raw": "{{apiUrl}}/auth/me",
+          "host": ["{{apiUrl}}"],
+          "path": ["auth", "me"]
+        },
+        "description": "The signed-in user, read fresh from the database.\n\n**Auth:** session token.\n\nUse this on app start to restore the session: if it returns 200 the stored token is still good, if it returns 401 send the user back to login.\n\n**Returns** the same `user` object that login returns."
+      }
+    },
+    {
+      "name": "Forget password",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "",
+              "if (body.success && body.data && body.data.token) {",
+              "  pm.collectionVariables.set('forgetToken', body.data.token);",
+              "  console.log('forgetToken saved');",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"admin@gmail.com\"\n}"
+        },
+        "url": {
+          "raw": "{{apiUrl}}/auth/forget-password",
+          "host": ["{{apiUrl}}"],
+          "path": ["auth", "forget-password"]
+        },
+        "description": "Step 1 of 3. Emails a 6-digit OTP and returns the purpose token for step 2.\n\n**Body:** `{ \"email\": \"...\" }`\n\n**Returns**\n```json\n{ \"data\": { \"token\": \"eyJhbGci...\" } }\n```\nKeep this token in memory — step 2 needs it as a bearer token.\n\n**Errors**\n| Status | message |\n|---|---|\n| 404 | This account does not exist. |\n\nUnverified accounts are rejected here too, so one email can never have a registration OTP and a reset OTP pending at the same time.\n\nThe email is sent **after** the response, so this returns immediately. In development the OTP is also printed to the server terminal:\n```\n[OtpService] OTP for you@example.com: 123456\n```\n\nThe test script saves the token as `forgetToken`."
+      }
+    },
+    {
+      "name": "Verify forget OTP",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "",
+              "if (body.success && body.data && body.data.token) {",
+              "  pm.collectionVariables.set('resetToken', body.data.token);",
+              "  console.log('resetToken saved');",
+              "}"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{forgetToken}}", "type": "string" }]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"otp\": \"123456\"\n}"
+        },
+        "url": {
+          "raw": "{{apiUrl}}/auth/verify-forget-otp",
+          "host": ["{{apiUrl}}"],
+          "path": ["auth", "verify-forget-otp"]
+        },
+        "description": "Step 2 of 3. Checks the OTP and hands back a second purpose token for the actual password change.\n\n**Auth:** the `forgetToken` from step 1.\n\n**Body:** `{ \"otp\": \"123456\" }` — the OTP is **6 digits**.\n\n**Returns**\n```json\n{ \"data\": { \"token\": \"eyJhbGci...\" } }\n```\n\n**Errors**\n| Status | message |\n|---|---|\n| 404 | OTP not found! |\n| 400 | OTP has expired |\n| 400 | Wrong OTP |\n| 401 | Invalid or expired token |\n\nThe OTP is single use: a successful check deletes it, so going back and resubmitting the same code fails with `OTP not found!`.\n\nThe test script saves the new token as `resetToken`."
+      }
+    },
+    {
+      "name": "Resend OTP",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{forgetToken}}", "type": "string" }]
+        },
+        "url": {
+          "raw": "{{apiUrl}}/auth/resend-otp",
+          "host": ["{{apiUrl}}"],
+          "path": ["auth", "resend-otp"]
+        },
+        "description": "Sends a fresh forget-password OTP. No body.\n\n**Auth:** the `forgetToken` from step 1 — the same token stays valid.\n\nWire this to the \"Didn't receive code? Resend\" link on the OTP screen.\n\nThe old OTP is replaced, so only the newest code works."
+      }
+    },
+    {
+      "name": "Reset password",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{resetToken}}", "type": "string" }]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"password\": \"newPass123\",\n  \"confirmPassword\": \"newPass123\"\n}"
+        },
+        "url": {
+          "raw": "{{apiUrl}}/auth/reset-password",
+          "host": ["{{apiUrl}}"],
+          "path": ["auth", "reset-password"]
+        },
+        "description": "Step 3 of 3. Sets the new password.\n\n**Auth:** the `resetToken` from step 2 — **not** the step 1 token.\n\n**Body**\n| Field | Type | Rule |\n|---|---|---|\n| password | string | at least 6 characters |\n| confirmPassword | string | must match `password` |\n\n**Errors**\n| Status | message |\n|---|---|\n| 400 | Passwords do not match |\n| 401 | Invalid or expired token |\n\nAfter this the user signs in normally with the new password."
+      }
+    },
+    {
+      "name": "Change password",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"oldPassword\": \"1qazxsw2\",\n  \"newPassword\": \"newPass123\",\n  \"confirmPassword\": \"newPass123\"\n}"
+        },
+        "url": {
+          "raw": "{{apiUrl}}/auth/change-password",
+          "host": ["{{apiUrl}}"],
+          "path": ["auth", "change-password"]
+        },
+        "description": "Changes the password of a user who is already signed in. This is the Settings screen, not the forgotten-password flow.\n\n**Auth:** session token.\n\n**Body**\n| Field | Type | Rule |\n|---|---|---|\n| oldPassword | string | the current password |\n| newPassword | string | at least 6 characters |\n| confirmPassword | string | must match `newPassword` |\n\n**Errors**\n| Status | message |\n|---|---|\n| 401 | Old password is incorrect |\n| 400 | Passwords do not match |"
+      }
+    }
+  ],
+  "variable": [
+    { "key": "forgetToken", "value": "" },
+    { "key": "resetToken", "value": "" }
+  ]
+}

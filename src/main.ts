@@ -21,8 +21,16 @@ async function bootstrap() {
     }),
   );
 
+  // Comma-separated so the deployed site and local dev can both reach the API.
+  const allowedOrigins = (
+    process.env.FRONTEND_URL ?? 'http://localhost:3090'
+  )
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
   app.enableCors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    origin: allowedOrigins,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   });

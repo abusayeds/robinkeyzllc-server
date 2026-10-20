@@ -1,0 +1,68 @@
+{
+  "info": {
+    "name": "Management",
+    "description": "Static legal and informational pages — About Us, Terms & Conditions, Privacy Policy.\n\nThese back the tabs on the Settings screen. There is exactly one row per `type`, so writing is an upsert: posting `about` twice replaces the text rather than creating a second row.\n\n**Allowed types:** `about`, `terms`, `privacy`",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Create or update (Super Admin)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"type\": \"privacy\",\n  \"description\": \"<h2>Privacy Policy</h2><p>Your content here. HTML is accepted.</p>\"\n}"
+        },
+        "url": {
+          "raw": "{{apiUrl}}/management/create",
+          "host": ["{{apiUrl}}"],
+          "path": ["management", "create"]
+        },
+        "description": "Writes the content for one page type. **Super Admin only.**\n\n**Auth:** session token of a `superAdmin`.\n\n**Body**\n| Field | Type | Rule |\n|---|---|---|\n| type | string | one of `about`, `terms`, `privacy` |\n| description | string | the page body; HTML is accepted |\n\n**Errors**\n| Status | message |\n|---|---|\n| 400 | Type must be one of: about, terms, privacy |\n| 403 | You are not authorized. |\n\nRunning this again with the same `type` overwrites the existing text — there is a unique constraint on `type`, so duplicates cannot happen."
+      }
+    },
+    {
+      "name": "Get by type (public)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{apiUrl}}/management?type=privacy",
+          "host": ["{{apiUrl}}"],
+          "path": ["management"],
+          "query": [
+            { "key": "type", "value": "privacy", "description": "about | terms | privacy" }
+          ]
+        },
+        "description": "Fetches one page.\n\n**Auth:** none — this is public, so the Privacy Policy and Terms can be shown before sign-in.\n\n**Returns**\n```json\n{\n  \"data\": {\n    \"id\": 3,\n    \"type\": \"privacy\",\n    \"description\": \"<h2>Privacy Policy</h2>...\",\n    \"createdAt\": \"2026-02-18T05:12:33.000Z\",\n    \"updatedAt\": \"2026-10-19T09:40:00.000Z\"\n  }\n}\n```\n\nIf nothing has been written for that type yet, `data` is `null` — render an empty state rather than an error."
+      }
+    },
+    {
+      "name": "List all (Super Admin)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "auth": {
+          "type": "bearer",
+          "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+        },
+        "url": {
+          "raw": "{{apiUrl}}/management/list?page=1&limit=10",
+          "host": ["{{apiUrl}}"],
+          "path": ["management", "list"],
+          "query": [
+            { "key": "page", "value": "1" },
+            { "key": "limit", "value": "10" },
+            { "key": "searchTerm", "value": "", "description": "Searches the description text.", "disabled": true }
+          ]
+        },
+        "description": "Every page type in one paged list. **Super Admin only.**\n\n**Auth:** session token of a `superAdmin`.\n\nSame pagination shape as `GET /users/all-user` — `pagination` sits beside `data`."
+      }
+    }
+  ]
+}

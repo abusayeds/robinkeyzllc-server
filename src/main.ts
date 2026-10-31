@@ -1,15 +1,20 @@
 import { RequestMethod, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { GlobalErrorHandler } from './common/errors/globalErrorHandler';
+import {
+  UPLOAD_PUBLIC_PREFIX,
+  UPLOAD_ROOT,
+} from './modules/upload/upload.constants';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: ['error', 'warn', 'log'],
   });
 
   app.useGlobalFilters(new GlobalErrorHandler());
-
+  app.useStaticAssets(UPLOAD_ROOT, { prefix: UPLOAD_PUBLIC_PREFIX });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -20,8 +25,6 @@ async function bootstrap() {
       },
     }),
   );
-
-  // Comma-separated so the deployed site and local dev can both reach the API.
   const allowedOrigins = (
     process.env.FRONTEND_URL ?? 'http://localhost:3090'
   )

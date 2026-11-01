@@ -1,0 +1,44 @@
+// An offer sheet a team puts on a free agent. Offers are kept after they are
+// answered: a commissioner looking into a disputed signing needs to see what
+// was offered and why it was allowed, not just the contract that came out.
+model FreeAgencyOffer {
+  id             Int  @id @default(autoincrement())
+  leagueId       Int
+  leaguePlayerId Int
+  teamId         Int
+  offeredById    Int?
+
+  years           Int
+  firstYearSalary Int
+
+  // Whole percent of the FIRST year added to each later season, which is how
+  // the CBA raises work — not compounding. 5 on $10,000,000 over three years
+  // is 10.0 / 10.5 / 11.0, never 10.0 / 10.5 / 11.025.
+  raisePct Float @default(0)
+
+  contractType ContractType @default(standard)
+  signedVia    SignedVia    @default(capSpace)
+
+  status FreeAgencyOfferStatus @default(pending)
+
+  // Each rule, with whether it passed, worked out when the offer is made and
+  // stored. Recomputing later would answer against a roster that has moved on
+  // and quietly change what the commissioner is looking at.
+  checks Json
+
+  expiresAt   DateTime?
+  respondedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  league       League       @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  leaguePlayer LeaguePlayer @relation(fields: [leaguePlayerId], references: [id], onDelete: Cascade)
+  team         Team         @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  offeredBy    User?        @relation("freeAgencyOffersMade", fields: [offeredById], references: [id], onDelete: SetNull)
+
+  // One live offer per team per player: raising a bid edits the offer rather
+  // than stacking a second one beside it.
+  @@unique([leaguePlayerId, teamId])
+  @@index([leagueId, status])
+  @@index([teamId, status])
+}

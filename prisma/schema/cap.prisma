@@ -1,0 +1,119 @@
+// The global cap settings, per Article 2 of the AVORA CBA.
+//
+// The rule book draws a hard line: a few figures are **entered** each league
+// year by the Super Admin, and everything else is a percentage of the salary
+// cap. Nothing here is computed from a constant in code, because Rule 2.2
+// says the Super Admin can edit every one of these.
+
+// Rule 2.3 — entered each league year.
+model CapYear {
+  id Int @id @default(autoincrement())
+
+  // The year the league year starts in: 2026 means 2026-27.
+  seasonStartYear Int @unique
+
+  salaryCap           Int
+  luxuryTax           Int
+  firstApron          Int
+  secondApron         Int
+  // Rule 10.12 reads cap holds against this, so it is entered too and is not
+  // derivable from the cap.
+  averagePlayerSalary Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([seasonStartYear])
+}
+
+// Rule 2.4 — calculated from the salary cap, and editable by the Super Admin.
+//
+// One row, because these are league-year independent: a percentage applies
+// to whatever the cap is that year. Kept as columns rather than key/value so
+// a typo cannot quietly become a missing rule.
+model CapRuleSet {
+  id Int @id @default(1)
+
+  // Article 2 pay table
+  salaryFloorPct       Float @default(90)
+  maxSalary0to6Pct     Float @default(25)
+  maxSalary7to9Pct     Float @default(30)
+  maxSalary10PlusPct   Float @default(35)
+  stretchLimitPct      Float @default(15)
+  nonTaxpayerMlePct    Float @default(9.12)
+  taxpayerMlePct       Float @default(3.676)
+  roomExceptionPct     Float @default(5.678)
+  biAnnualExceptionPct Float @default(3.32)
+  bandCushionPct       Float @default(5.514)
+
+  // Article 2 fixed amounts, not tied to the cap.
+  tradeAllowance          Int @default(250000)
+  tradeExceptionAllowance Int @default(250000)
+  qualifyingOfferAddOn    Int @default(200000)
+
+  // Rule 10.12 cap holds, as a percentage of the player's prior salary.
+  holdFullBirdAtOrAboveAvgPct Float @default(150)
+  holdFullBirdBelowAvgPct     Float @default(190)
+  holdRookieAtOrAboveAvgPct   Float @default(250)
+  holdRookieBelowAvgPct       Float @default(300)
+  holdEarlyBirdPct            Float @default(130)
+  holdNonBirdPct              Float @default(120)
+
+  // Rule 8.15 Apron Repeater Charge, adjustable per league in settings.
+  repeaterChargeSecondSeasonPct Float @default(25)
+  repeaterChargeThirdSeasonPct  Float @default(50)
+
+  // Rule 10.9 and 11.14 qualifying offers.
+  qualifyingOfferPriorSalaryPct Float @default(125)
+
+  updatedAt DateTime @updatedAt
+}
+
+// Rule 10.11 — the minimum salary scale, as a percentage of the cap by years
+// of service. Eleven rows, 0 through 10+.
+model MinimumSalaryStep {
+  id Int @id @default(autoincrement())
+
+  // 10 means "10 or more": the scale stops rising there.
+  yearsOfService Int   @unique
+  percentOfCap   Float
+}
+
+// Rule 11.9 — the first-round rookie scale.
+//
+// Three stored percentages per slot, exactly as the rule book specifies:
+// Year 1 as a percentage of the cap, Year 4 and the qualifying offer as
+// percentages of Year 1. Years 2 and 3 are the same 105% / 110% for every
+// slot and live on CapRuleSet's sibling below.
+model RookieScaleSlot {
+  id Int @id @default(autoincrement())
+
+  pick Int @unique
+
+  // Stored to six decimal places, per the rule book's note.
+  year1PercentOfCap   Float
+  year4PercentOfYear1 Float
+  qoPercentOfYear1    Float
+}
+
+// Rule 11.15 — the second-round scale, and the two shared first-round raises.
+model SecondRoundScale {
+  id Int @id @default(1)
+
+  // Shared by every first-round slot (Rule 11.4).
+  firstRoundYear2PercentOfYear1 Float @default(105)
+  firstRoundYear3PercentOfYear1 Float @default(110)
+
+  // Three-year structure, final year a team option.
+  threeYearYear1PercentOfCap   Float @default(1.3246)
+  threeYearYear2PercentOfYear1 Float @default(105)
+  threeYearYear3PercentOfYear1 Float @default(123.31)
+
+  // Four-year structure.
+  fourYearYear1PercentOfCap   Float @default(1.4848)
+  fourYearYear2PercentOfYear1 Float @default(105)
+  fourYearYear3PercentOfYear1 Float @default(110)
+  fourYearYear4PercentOfYear1 Float @default(119.14)
+
+  updatedAt DateTime @updatedAt
+}

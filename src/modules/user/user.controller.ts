@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Param,
   ParseIntPipe,
+  Patch,
   Post,
   Query,
   Res,
@@ -18,6 +19,8 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { TAuthUser } from '../../interface/auth.interface';
 import { role } from '../../utils/role';
 import { createUserDto } from './dto/create-user.dto';
+import { SearchUserDto } from './dto/search-user.dto';
+import { updateProfileDto } from './dto/update-profile.dto';
 import { verifyEmailDto } from './dto/verify-email.dto';
 import { usersService } from './user.service';
 
@@ -75,6 +78,19 @@ export class usersController {
     });
   }
 
+  // Declared before the ':id' route below, or 'search' is read as a user id.
+  @Get('search')
+  @Auth()
+  async searchUsers(@Res() res: Response, @Query() query: SearchUserDto) {
+    const data = await this.usersService.searchUsersDB(query);
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'Users retrieved successfully',
+      data: data,
+    });
+  }
+
   @Get('all-user')
   @Auth(role.superAdmin)
   async getAllUsers(
@@ -118,6 +134,24 @@ export class usersController {
       success: true,
       message: 'user deleted successfully',
       data: data,
+    });
+  }
+
+  // A 'me' route rather than ':id', so the caller can only ever change
+  // their own profile.
+  @Patch('me')
+  @Auth()
+  async updateMyProfile(
+    @Res() res: Response,
+    @CurrentUser('id') userId: number,
+    @Body() payload: updateProfileDto,
+  ) {
+    const data = await this.usersService.updateMyProfileDB(userId, payload);
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'Profile updated successfully',
+      data,
     });
   }
 }

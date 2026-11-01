@@ -1,0 +1,121 @@
+// Trades, and the exceptions they leave behind.
+//
+// A trade is kept after it is processed. Working out why a team is over the
+// cap six weeks later means reading what moved and when, so nothing here is
+// deleted once it has happened.
+
+model Trade {
+  id           Int  @id @default(autoincrement())
+  leagueId     Int
+  proposedById Int?
+
+  status TradeStatus @default(proposed)
+
+  // Decided when the trade is proposed, from the league's own setting, and
+  // then kept. Turning the setting off later must not retroactively approve
+  // a trade that was waiting for a commissioner.
+  requiresApproval Boolean @default(false)
+
+  approvedById   Int?
+  approvedAt     DateTime?
+  rejectedReason String?
+
+  // Every rule, with whether it passed, worked out at proposal time and
+  // stored. Rosters and payrolls move; the judgement has to stay still.
+  checks Json
+
+  message String?
+
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  league     League           @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  proposedBy User?            @relation("tradesProposed", fields: [proposedById], references: [id], onDelete: SetNull)
+  approvedBy User?            @relation("tradesApproved", fields: [approvedById], references: [id], onDelete: SetNull)
+  teams      TradeTeam[]
+  assets     TradeAsset[]
+  exceptions TradeException[]
+
+  @@index([leagueId, status])
+}
+
+// One row per team in the trade, holding that team's answer. A trade is not
+// two-sided by assumption: three- and four-team deals are the reason this is
+// a table rather than two columns on Trade.
+model TradeTeam {
+  id      Int @id @default(autoincrement())
+  tradeId Int
+  teamId  Int
+
+  response      TradeResponse @default(pending)
+  respondedById Int?
+  respondedAt   DateTime?
+
+  trade       Trade @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  team        Team  @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  respondedBy User? @relation("tradeResponses", fields: [respondedById], references: [id], onDelete: SetNull)
+
+  @@unique([tradeId, teamId])
+  @@index([teamId, response])
+}
+
+// One thing changing hands. Both ends are named, because in a three-team deal
+// "the other team" is not a question with one answer.
+model TradeAsset {
+  id      Int @id @default(autoincrement())
+  tradeId Int
+
+  fromTeamId Int
+  toTeamId   Int
+
+  kind TradeAssetKind
+
+  leaguePlayerId   Int?
+  tradeExceptionId Int?
+
+  // The salary this asset carries for matching purposes, frozen at proposal
+  // time. A contract edited afterwards must not silently change what the
+  // trade was judged to be.
+  salary Int @default(0)
+
+  trade          Trade           @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  fromTeam       Team            @relation("tradeAssetsOut", fields: [fromTeamId], references: [id], onDelete: Cascade)
+  toTeam         Team            @relation("tradeAssetsIn", fields: [toTeamId], references: [id], onDelete: Cascade)
+  leaguePlayer   LeaguePlayer?   @relation(fields: [leaguePlayerId], references: [id], onDelete: SetNull)
+  tradeException TradeException? @relation("tradeExceptionMoved", fields: [tradeExceptionId], references: [id], onDelete: SetNull)
+
+  @@index([tradeId])
+  @@index([leaguePlayerId])
+}
+
+// A traded player exception: room a team may use later, created when it sends
+// out more salary than it takes back.
+model TradeException {
+  id       Int @id @default(autoincrement())
+  leagueId Int
+  teamId   Int
+
+  label String
+
+  // `amount` is what it was worth when created and never changes; `remaining`
+  // is what is left. A TPE can be used in pieces, so one number cannot serve
+  // both and a used exception must still show what it started as.
+  amount    Int
+  remaining Int
+
+  expiresAt DateTime
+  isActive  Boolean  @default(true)
+
+  sourceTradeId Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  league      League       @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  team        Team         @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  sourceTrade Trade?       @relation(fields: [sourceTradeId], references: [id], onDelete: SetNull)
+  movedIn     TradeAsset[] @relation("tradeExceptionMoved")
+
+  @@index([leagueId, teamId, isActive])
+}

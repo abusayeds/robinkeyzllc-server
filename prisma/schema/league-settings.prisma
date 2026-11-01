@@ -1,0 +1,65 @@
+// One row per league, created with the league. Kept apart from League so
+// listing leagues does not drag every cap and trading column along.
+model LeagueSettings {
+  id       Int @id @default(autoincrement())
+  leagueId Int @unique
+
+  setupMode   LeagueSetupMode @default(startup)
+  // Turned on by the first import or draft, after which the mode can no
+  // longer be switched: going back would orphan every contract already in.
+  setupLocked Boolean         @default(false)
+
+  freeAgencyStyle FreeAgencyStyle @default(dynamic)
+
+  salaryMatching              Boolean @default(true)
+  apronRules                  Boolean @default(true)
+  allowTradeExceptions        Boolean @default(true)
+  allowTradingTradeExceptions Boolean @default(true)
+  allowDraftPickTrading       Boolean @default(true)
+  commissionerTradeApproval   Boolean @default(false)
+
+  // Rule 2.1 — a league uses either the app's default figures, maintained by
+  // the Super Admin each league year, or its own. A default league leaves the
+  // four below null and reads CapYear instead; updates never overwrite a
+  // custom league's numbers (Rule 2.6).
+  useCustomCapNumbers Boolean @default(false)
+
+  customSalaryCap   Int?
+  customLuxuryTax   Int?
+  customFirstApron  Int?
+  customSecondApron Int?
+
+  // Whole dollars. Int holds up to 2.1 billion, and BigInt would break
+  // JSON.stringify.
+  // No seeded figures: a new league starts at 0 and shows 0 until the
+  // commissioner sets its own cap. A borrowed NBA number looks like a decision
+  // somebody made.
+  salaryCap        Int              @default(0)
+  minPlayerSalary  Int              @default(0)
+  hardCapEnabled   Boolean          @default(false)
+  hardCapThreshold HardCapThreshold @default(luxuryTax)
+
+  // Roster rules. The commissioner sets these freely: nothing here is forced
+  // to add up, because leagues count bench and injured spots differently.
+  minRosterSize Int @default(13)
+  maxRosterSize Int @default(15)
+  // Three, per the client's answers: "limited by the league's two-way slots
+  // (default 3)". It was 2, which is the older NBA rule.
+  maxTwoWay     Int @default(3)
+
+  slotGuard   Int @default(2)
+  slotForward Int @default(2)
+  slotCenter  Int @default(1)
+  slotFlex    Int @default(2)
+  slotBench   Int @default(7)
+  slotIr      Int @default(3)
+
+  // Minutes before tip-off that a lineup stops accepting changes. Stored
+  // here; enforcing it needs game times, which are entered by hand.
+  pregameLockMinutes Int @default(5)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  league League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+}

@@ -17,7 +17,8 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "sync:nba": "node dist/src/nba-sync.cli.js"
   },
   "dependencies": {
     "@nestjs/bull": "^11.0.4",
@@ -60,6 +61,7 @@
     "@types/bull": "^3.15.9",
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
+    "@types/multer": "^2.3.0",
     "@types/node": "^22.19.3",
     "@types/nodemailer": "^8.0.2",
     "@types/passport-jwt": "^4.0.1",

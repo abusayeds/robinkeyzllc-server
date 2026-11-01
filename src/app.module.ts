@@ -21,6 +21,7 @@ import { FreeAgencyModule } from './modules/free-agency/free-agency.module';
 import { OverviewModule } from './modules/overview/overview.module';
 import { NbaModule } from './modules/nba/nba.module';
 import { TradeModule } from './modules/trade/trade.module';
+import { CapModule } from './modules/cap/cap.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { TradeModule } from './modules/trade/trade.module';
       envFilePath: '.env',
     }),
     PrismaModule,
+    CapModule,
     OtpModule,
     usersModule,
     managementModel,

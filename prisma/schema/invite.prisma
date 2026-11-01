@@ -1,0 +1,22 @@
+model LeagueInvite {
+  id          Int                @id @default(autoincrement())
+  leagueId    Int
+  userId      Int
+  invitedById Int?
+  status      LeagueInviteStatus @default(pending)
+  respondedAt DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  league    League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  user      User   @relation("leagueInvitesReceived", fields: [userId], references: [id], onDelete: Cascade)
+  // The invite outlives the commissioner's account, so this one is nulled
+  // rather than cascaded.
+  invitedBy User?  @relation("leagueInvitesSent", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  // One row per user per league: re-inviting someone who declined reuses it.
+  @@unique([leagueId, userId])
+  @@index([userId, status])
+  @@index([leagueId, status])
+  @@index([invitedById])
+}

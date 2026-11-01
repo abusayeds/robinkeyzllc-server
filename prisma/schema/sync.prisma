@@ -1,0 +1,27 @@
+// A record of every pull from the NBA API.
+//
+// Kept because a sync is the one thing in this system that changes data
+// nobody asked it to change: when a player's team is suddenly wrong, the
+// first question is which run did it and what did it see.
+model SyncRun {
+  id     Int        @id @default(autoincrement())
+  job    SyncJob
+  status SyncStatus @default(running)
+
+  // Null until the run finishes, so a crashed run is visibly unfinished
+  // rather than silently successful.
+  finishedAt DateTime?
+
+  created Int @default(0)
+  updated Int @default(0)
+  skipped Int @default(0)
+
+  // Where to resume from if the run stopped part way. balldontlie paginates
+  // by cursor, so this is its cursor and not a page number.
+  cursor String?
+
+  error     String?
+  startedAt DateTime @default(now())
+
+  @@index([job, startedAt])
+}

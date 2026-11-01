@@ -1,0 +1,117 @@
+// Real NBA players and teams, shared by every league. A league never owns a
+// player row — its roster points at one — so a single nightly sync updates
+// every league at once.
+//
+// Everything balldontlie supplies is nullable: a player may be created by an
+// import before any sync has reached him, and the API itself leaves fields
+// blank for undrafted and international players.
+
+model NbaTeam {
+  id Int @id @default(autoincrement())
+
+  // balldontlie's own id, what the sync upserts on.
+  bdlTeamId Int @unique
+
+  abbreviation String
+  city         String
+  name         String
+  fullName     String
+  conference   String?
+  division     String?
+
+  // balldontlie returns every franchise that ever played, including the
+  // Toronto Huskies and the Chicago Stags. Only the 30 current teams carry a
+  // conference, so that is what marks one: the historical rows are kept
+  // because a player's record can still point at them.
+  isCurrent Boolean @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  syncedAt  DateTime?
+
+  players Player[]
+}
+
+model Player {
+  id Int @id @default(autoincrement())
+
+  bdlPlayerId Int? @unique
+
+  firstName String
+  lastName  String
+  name      String
+
+  // Lowercased, accents stripped, punctuation and Jr/Sr/II/III/IV removed.
+  // Import matching compares against this and never against `name`, so
+  // "Nikola Vucevic" in a spreadsheet finds "Nikola Vučević". Not unique:
+  // two different players can normalise to the same string, which is exactly
+  // the case that must go to manual review.
+  nameNormalized String
+
+  position String?
+  height   String?
+  college  String?
+  country  String?
+
+  draftYear   Int?
+  draftRound  Int?
+  draftNumber Int?
+
+  nbaTeamId Int?
+  isActive  Boolean @default(true)
+
+  // balldontlie carries no experience field on any tier, so this is counted
+  // from completed seasons with at least one game played. `estimated` marks
+  // the draft-year fallback, which is wrong for draft-and-stash players and
+  // for anyone who missed a whole season.
+  yearsOfService          Int?
+  yearsOfServiceEstimated Boolean @default(false)
+
+  // Also absent from balldontlie, so a super admin imports birthdates
+  // separately. A calendar date, not an instant: a birthday does not move
+  // with the reader's time zone. Age is worked out when shown, never stored.
+  birthdate DateTime? @db.Date
+
+  headshot String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  syncedAt  DateTime?
+
+  nbaTeam       NbaTeam?       @relation(fields: [nbaTeamId], references: [id], onDelete: SetNull)
+  aliases       PlayerAlias[]
+  leaguePlayers LeaguePlayer[]
+  deadMoney     DeadMoney[]
+  importRows    ImportRow[]
+
+  @@index([nameNormalized])
+  // Declared here, not only in SQL: without it Prisma treats the trigram index
+  // as drift and writes a DROP INDEX into the next migration, which would turn
+  // every fuzzy lookup back into a full table scan without anything failing.
+  @@index([nameNormalized(ops: raw("gin_trgm_ops"))], map: "Player_nameNormalized_trgm_idx", type: Gin)
+  @@index([lastName, firstName])
+  @@index([isActive])
+}
+
+// One row per nickname or correction. Every time a commissioner resolves a row
+// the import could not match, the answer is stored here, so the next import
+// matches it without being asked again.
+model PlayerAlias {
+  id       Int @id @default(autoincrement())
+  playerId Int
+
+  alias String
+
+  // Unique across every player: one spelling cannot point at two of them, or
+  // matching would have to guess. Aliases are global, so a wrong one added in
+  // one league would follow the player into all of them — hence `createdBy`.
+  aliasNormalized String @unique
+
+  createdById Int?
+  createdAt   DateTime @default(now())
+
+  player    Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  createdBy User?  @relation("playerAliasesCreated", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([playerId])
+}

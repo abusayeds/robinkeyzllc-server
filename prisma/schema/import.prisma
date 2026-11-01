@@ -1,0 +1,72 @@
+// Upload staging. Nothing an import produces reaches a roster until the
+// commissioner confirms it, so the uploaded file lives here first, row by row,
+// with whatever the matcher and the validator found against each one.
+
+model ImportBatch {
+  id           Int  @id @default(autoincrement())
+  leagueId     Int
+  uploadedById Int?
+
+  filename String
+
+  // The league year the template was generated for, so the season columns can
+  // be read back even after the league has rolled over.
+  seasonStartYear Int
+
+  status ImportBatchStatus @default(preview)
+
+  rowCount     Int @default(0)
+  matchedCount Int @default(0)
+  issueCount   Int @default(0)
+
+  confirmedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  league     League      @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  uploadedBy User?       @relation("importBatchesUploaded", fields: [uploadedById], references: [id], onDelete: SetNull)
+  rows       ImportRow[]
+
+  @@index([leagueId, status])
+}
+
+model ImportRow {
+  id         Int @id @default(autoincrement())
+  batchId    Int
+  lineNumber Int
+
+  // Kept exactly as typed, never cleaned up. The preview quotes these back,
+  // and a commissioner comparing the screen with their own spreadsheet has to
+  // see what they wrote.
+  rawTeam         String
+  rawPlayer       String
+  rawBirdYears    String?
+  rawContractType String?
+  rawSignedVia    String?
+  rawSignedSeason String?
+
+  // The season cells as given, keyed by the season's starting year.
+  rawSeasons Json
+
+  rowType ImportRowType @default(unknown)
+
+  matchStatus     NameMatchStatus  @default(notFound)
+  matchMethod     NameMatchMethod?
+  matchConfidence Float?
+  playerId        Int?
+  teamId          Int?
+
+  // What the preview must show before this row can be confirmed. An empty
+  // list is what makes a row ready.
+  issues Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  batch  ImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  player Player?     @relation(fields: [playerId], references: [id], onDelete: SetNull)
+  team   Team?       @relation(fields: [teamId], references: [id], onDelete: SetNull)
+
+  @@unique([batchId, lineNumber])
+  @@index([batchId, matchStatus])
+}

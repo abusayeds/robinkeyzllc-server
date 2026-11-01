@@ -2,14 +2,27 @@ model Team {
   id        Int      @id @default(autoincrement())
   leagueId  Int
   name      String
+  abbr      String
+  color     String   @default("#2563EB")
   logo      String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  league  League       @relation(fields: [leagueId], references: [id], onDelete: Cascade)
-  members TeamMember[]
+  league          League            @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  members         TeamMember[]
+  leaguePlayers   LeaguePlayer[]
+  contracts       Contract[]
+  deadMoney       DeadMoney[]
+  capHolds        CapHold[]
+  importRows      ImportRow[]
+  faOffers        FreeAgencyOffer[]
+  tradeTeams      TradeTeam[]
+  tradeAssetsOut  TradeAsset[]      @relation("tradeAssetsOut")
+  tradeAssetsIn   TradeAsset[]      @relation("tradeAssetsIn")
+  tradeExceptions TradeException[]
 
   @@unique([leagueId, name])
+  @@unique([leagueId, abbr])
 }
 
 model TeamMember {

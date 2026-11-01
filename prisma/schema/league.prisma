@@ -1,18 +1,37 @@
 model League {
-  id          Int      @id @default(autoincrement())
+  id          Int              @id @default(autoincrement())
   name        String
   logo        String?
+  teamCount   Int              @default(12)
+  scoringType ScoringType      @default(headToHead9Cat)
+  draftType   DraftType        @default(snake)
+  visibility  LeagueVisibility @default(private)
+  season      String
   createdById Int
-  isDeleted   Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  isDeleted   Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
 
-  createdBy   User           @relation(fields: [createdById], references: [id])
-  members     LeagueMember[]
-  teams       Team[]
-  teamMembers TeamMember[]
+  createdBy       User                  @relation(fields: [createdById], references: [id])
+  members         LeagueMember[]
+  teams           Team[]
+  teamMembers     TeamMember[]
+  contents        LeagueContent[]
+  settings        LeagueSettings?
+  calendarEvents  LeagueCalendarEvent[]
+  notifications   Notification[]
+  invites         LeagueInvite[]
+  leaguePlayers   LeaguePlayer[]
+  contracts       Contract[]
+  deadMoney       DeadMoney[]
+  capHolds        CapHold[]
+  importBatches   ImportBatch[]
+  faOffers        FreeAgencyOffer[]
+  trades          Trade[]
+  tradeExceptions TradeException[]
 
   @@index([createdById])
+  @@index([visibility, isDeleted])
 }
 
 model LeagueMember {

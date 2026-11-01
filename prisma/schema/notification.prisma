@@ -1,0 +1,18 @@
+model Notification {
+  id        Int              @id @default(autoincrement())
+  userId    Int
+  leagueId  Int?
+  type      NotificationType @default(system)
+  title     String
+  detail    String
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  league League? @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@index([leagueId])
+}

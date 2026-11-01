@@ -10,6 +10,8 @@ import {
   sendRegistrationOtpEmail,
 } from '../../utils/sendEmail';
 import { createUserDto } from './dto/create-user.dto';
+import { SearchUserDto } from './dto/search-user.dto';
+import { updateProfileDto } from './dto/update-profile.dto';
 import { verifyEmailDto } from './dto/verify-email.dto';
 
 const safeUserSelect = {
@@ -17,6 +19,7 @@ const safeUserSelect = {
   email: true,
   name: true,
   phone: true,
+  image: true,
   role: true,
   isDeleted: true,
   isEmailVerified: true,
@@ -87,6 +90,69 @@ export class usersService {
       data: { isEmailVerified: true },
       select: safeUserSelect,
     });
+  }
+
+  /**
+   * Powers the invite picker. The person being invited is not a league member
+   * yet, so the league's own member list cannot find them.
+   */
+  async searchUsersDB(payload: SearchUserDto) {
+    const q = payload.q.trim();
+
+    const users = await this.prisma.user.findMany({
+      where: {
+        isDeleted: false,
+        role: Role.user,
+        OR: [
+          { name: { contains: q, mode: 'insensitive' } },
+          { email: { contains: q, mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true, name: true, email: true, image: true },
+      orderBy: { name: 'asc' },
+      take: 10,
+    });
+
+    if (!payload.leagueId || !users.length) {
+      return users.map((user) => ({
+        userId: user.id,
+        name: user.name,
+        email: user.email,
+        image: user.image,
+        inLeague: false,
+        invited: false,
+      }));
+    }
+
+    const userIds = users.map((user) => user.id);
+
+    // Two queries for the whole page of hits instead of two per hit.
+    const [members, invites] = await Promise.all([
+      this.prisma.leagueMember.findMany({
+        where: { leagueId: payload.leagueId, userId: { in: userIds } },
+        select: { userId: true },
+      }),
+      this.prisma.leagueInvite.findMany({
+        where: {
+          leagueId: payload.leagueId,
+          userId: { in: userIds },
+          status: 'pending',
+        },
+        select: { userId: true },
+      }),
+    ]);
+
+    const inLeague = new Set(members.map((member) => member.userId));
+    const invited = new Set(invites.map((invite) => invite.userId));
+
+    return users.map((user) => ({
+      userId: user.id,
+      name: user.name,
+      email: user.email,
+      image: user.image,
+      inLeague: inLeague.has(user.id),
+      invited: invited.has(user.id),
+    }));
   }
 
   async resendEmailOtpDB(rawToken: string) {
@@ -183,6 +249,29 @@ export class usersService {
   async findByEmail(email: string) {
     return this.prisma.user.findUnique({
       where: { email },
+    });
+  }
+  async updateMyProfileDB(id: number, payload: updateProfileDto) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user || user.isDeleted) {
+      throw new AppError(HttpStatus.NOT_FOUND, 'User not found.');
+    }
+
+    // Only the keys actually sent are written, so a partial form never wipes
+    // the fields it left out.
+    const data: Prisma.UserUpdateInput = {};
+    if (payload.name !== undefined) data.name = payload.name.trim();
+    if (payload.phone !== undefined) data.phone = payload.phone.trim();
+    if (payload.image !== undefined) data.image = payload.image || null;
+
+    if (!Object.keys(data).length) {
+      throw new AppError(HttpStatus.BAD_REQUEST, 'Nothing to update.');
+    }
+
+    return this.prisma.user.update({
+      where: { id },
+      data,
+      select: safeUserSelect,
     });
   }
 }

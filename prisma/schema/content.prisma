@@ -1,0 +1,18 @@
+// Help, Privacy, Terms and About, written per league by its commissioner.
+// A league with no row of a type falls back to the platform-wide Management
+// row of the same name, so a new league is never blank.
+model LeagueContent {
+  id          Int               @id @default(autoincrement())
+  leagueId    Int
+  type        LeagueContentType
+  description String
+  updatedById Int?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  league    League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  updatedBy User?  @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@unique([leagueId, type])
+  @@index([updatedById])
+}

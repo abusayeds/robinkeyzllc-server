@@ -1,0 +1,30 @@
+// One row per date on a league's calendar. Seeded from a default template
+// when the league is created, then edited freely by the commissioner.
+model LeagueCalendarEvent {
+  id       Int    @id @default(autoincrement())
+  leagueId Int
+  season   String
+
+  title       String
+  phase       CalendarPhase
+  description String        @default("")
+
+  // Real dates, not text, so they can be compared and ordered in SQL.
+  startDate     DateTime
+  // Set only for a span such as "Apr 5 - Apr 18".
+  endDate       DateTime?
+  // For a date that is not pinned down yet, such as "Late June".
+  isApproximate Boolean   @default(false)
+  // Overrides how the date reads in the table when it is a span or vague.
+  displayLabel  String?
+  // Tip-off style time of day, kept as text because only some events have one.
+  time          String?
+
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  league League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  @@index([leagueId, season, startDate])
+}

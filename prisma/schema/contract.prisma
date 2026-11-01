@@ -1,0 +1,164 @@
+// A league's own view of a player, and the money attached to him.
+//
+// Seasons are stored as the year they start in — 2026 means the 2026-27 league
+// year — rather than as the "2026-27" string the import file uses. One integer
+// sorts correctly, subtracts correctly for a rollover, and cannot be written
+// two ways; the display form is built when it is shown.
+
+// One row per player per league. This is what makes a global player belong
+// somewhere: his fantasy team, his status, and the bird years the league has
+// been counting for him.
+model LeaguePlayer {
+  id       Int @id @default(autoincrement())
+  leagueId Int
+  playerId Int
+
+  // Null while he is a free agent, waived, or held only by rights.
+  teamId Int?
+
+  status    LeaguePlayerStatus @default(rostered)
+  birdYears Int                @default(0)
+  slotType  RosterSlotType     @default(standard)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  league      League            @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  player      Player            @relation(fields: [playerId], references: [id], onDelete: Restrict)
+  team        Team?             @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  contracts   Contract[]
+  capHolds    CapHold[]
+  faOffers    FreeAgencyOffer[]
+  tradeAssets TradeAsset[]
+
+  // One row per player per league: an import that produces two contract rows
+  // for the same player is refused here as well as in the preview.
+  @@unique([leagueId, playerId])
+  @@index([leagueId, teamId])
+  @@index([leagueId, status])
+}
+
+// The league's own contract. Never the real NBA one — that is kept separately
+// and shown as reference only, because the file always wins.
+model Contract {
+  id             Int @id @default(autoincrement())
+  leagueId       Int
+  leaguePlayerId Int
+  teamId         Int
+
+  contractType ContractType   @default(standard)
+  signedVia    SignedVia      @default(capSpace)
+  source       ContractSource @default(import)
+
+  // Blank in the file means signed before this season, which is why it is
+  // nullable: the exception it used is then already spent and nothing is
+  // deducted from the team's balance.
+  signedSeasonStartYear Int?
+
+  // The first and last season columns holding a salary. Derived from the file
+  // rather than read from it — the import screen's "Contract Yrs" is a
+  // calculation, not an input.
+  startSeasonStartYear Int
+  endSeasonStartYear   Int
+
+  // Set by a QO cell on the import row: he becomes a restricted free agent
+  // when this contract runs out.
+  rfaOnExpiry Boolean @default(false)
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  league       League         @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  leaguePlayer LeaguePlayer   @relation(fields: [leaguePlayerId], references: [id], onDelete: Cascade)
+  team         Team           @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  years        ContractYear[]
+
+  @@index([leagueId, teamId])
+  @@index([leaguePlayerId])
+}
+
+// One row per season of a contract. The options and guarantees live here and
+// not on the contract, because they differ season by season — a deal can be
+// guaranteed for two years and carry a player option in the third.
+model ContractYear {
+  id         Int @id @default(autoincrement())
+  contractId Int
+
+  seasonStartYear Int
+
+  salary Int
+
+  // Usually the same as salary, but not always: a two-way contract is stored
+  // at 0 so it does not count against the cap.
+  capHit Int
+
+  optionType    ContractOptionType?
+  guaranteeType GuaranteeType       @default(full)
+
+  // Only meaningful when guaranteeType is partial — the second number in a
+  // "2100000 PG 500000" cell.
+  guaranteedAmount Int?
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+
+  @@unique([contractId, seasonStartYear])
+}
+
+// Money still on a team's books for a player it waived or bought out.
+//
+// Keyed on the team and the player directly rather than through LeaguePlayer,
+// because the two can disagree on purpose: the dead money sits with the team
+// that waived him while he plays for somebody else.
+model DeadMoney {
+  id       Int @id @default(autoincrement())
+  leagueId Int
+  teamId   Int
+  playerId Int
+
+  seasonStartYear Int
+  amount          Int
+
+  // A stretched contract spreads the same money over more seasons, so the row
+  // has to say which it is.
+  isStretched Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  league League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Restrict)
+
+  @@unique([leagueId, teamId, playerId, seasonStartYear])
+  @@index([leagueId, teamId])
+}
+
+// A team holds a player's rights without a contract: his cap hold counts
+// against the cap, but he takes no roster spot. A qualifying offer is the same
+// thing with the extra meaning that he will be a restricted free agent.
+model CapHold {
+  id             Int @id @default(autoincrement())
+  leagueId       Int
+  teamId         Int
+  leaguePlayerId Int
+
+  seasonStartYear Int
+
+  // A bare CH cell carries no amount, in which case it is worked out from his
+  // last salary and bird years — so this is written, never left to the reader.
+  amount Int
+
+  isQualifyingOffer Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  league       League       @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  team         Team         @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  leaguePlayer LeaguePlayer @relation(fields: [leaguePlayerId], references: [id], onDelete: Cascade)
+
+  @@unique([leaguePlayerId, seasonStartYear])
+  @@index([leagueId, teamId])
+}

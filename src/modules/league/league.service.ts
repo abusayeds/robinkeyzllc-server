@@ -2,11 +2,10 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { LeagueRole, Prisma } from '@prisma/client';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { AppError } from '../../common/errors/appError';
+import { parseSeasonLabel } from '../../utils/season';
+import { CapService } from '../cap/cap.service';
 import { NotificationService } from '../notification/notification.service';
-import {
-  buildDefaultCalendar,
-  nextSeason,
-} from './calendar.template';
+import { buildDefaultCalendar, nextSeason } from './calendar.template';
 import {
   CreateCalendarEventDto,
   UpdateCalendarEventDto,
@@ -16,7 +15,6 @@ import { CreateLeagueDto } from './dto/create-league.dto';
 import { UpdateLeagueSettingsDto } from './dto/update-league-settings.dto';
 import { UpdateLeagueDto } from './dto/update-league.dto';
 import {
-  CAP_MULTIPLIERS,
   TCapThresholds,
   TLeagueMember,
   TLeagueSummary,
@@ -30,6 +28,7 @@ export class LeagueService {
   constructor(
     private prisma: PrismaService,
     private readonly notificationService: NotificationService,
+    private readonly capService: CapService,
   ) {}
   private currentSeason(now = new Date()) {
     const year = now.getFullYear();
@@ -37,10 +36,7 @@ export class LeagueService {
     const endShort = String((startYear + 1) % 100).padStart(2, '0');
     return `${startYear}-${endShort}`;
   }
-  private toUiRoles(
-    leagueRole: LeagueRole,
-    hasTeam: boolean,
-  ): TUiLeagueRole[] {
+  private toUiRoles(leagueRole: LeagueRole, hasTeam: boolean): TUiLeagueRole[] {
     const roles: TUiLeagueRole[] = [];
 
     if (hasTeam) roles.push('Team Owner');
@@ -180,7 +176,10 @@ export class LeagueService {
       create: { leagueId },
     });
 
-    return this.toSettingsPayload(settings);
+    return this.toSettingsPayload(
+      settings,
+      await this.seasonStartYearOf(leagueId),
+    );
   }
 
   async updateSettings(leagueId: number, payload: UpdateLeagueSettingsDto) {
@@ -216,7 +215,10 @@ export class LeagueService {
       data,
     });
 
-    return this.toSettingsPayload(settings);
+    return this.toSettingsPayload(
+      settings,
+      await this.seasonStartYearOf(leagueId),
+    );
   }
 
   async members(leagueId: number): Promise<TLeagueMember[]> {
@@ -332,19 +334,52 @@ export class LeagueService {
     return { userId, role: updated.role };
   }
 
-  private capThresholds(salaryCap: number): TCapThresholds {
+  /**
+   * The thresholds a settings page shows.
+   *
+   * Article 2 says the tax line and both aprons are **entered** by the Super
+   * Admin each league year, so these come from the cap engine. The
+   * multipliers that used to live here were close but not the client's
+   * figures: 127% against their 126.71% is about $480,000 on a $165M cap,
+   * enough to put a team in the wrong tier.
+   */
+  /** The league year a league is currently in, as the year it starts in. */
+  private async seasonStartYearOf(leagueId: number) {
+    const league = await this.prisma.league.findUnique({
+      where: { id: leagueId },
+      select: { season: true },
+    });
+    return (
+      (league ? parseSeasonLabel(league.season) : null) ??
+      new Date().getUTCFullYear()
+    );
+  }
+
+  private async capThresholds(
+    leagueId: number,
+    seasonStartYear: number,
+  ): Promise<TCapThresholds> {
+    const cap = await this.capService.forLeague(leagueId, seasonStartYear);
     return {
-      salaryFloor: Math.round(salaryCap * CAP_MULTIPLIERS.salaryFloor),
-      luxuryTax: Math.round(salaryCap * CAP_MULTIPLIERS.luxuryTax),
-      firstApron: Math.round(salaryCap * CAP_MULTIPLIERS.firstApron),
-      secondApron: Math.round(salaryCap * CAP_MULTIPLIERS.secondApron),
-      maxPlayerSalary: Math.round(salaryCap * CAP_MULTIPLIERS.maxPlayerSalary),
+      salaryFloor: cap.salaryFloor,
+      luxuryTax: cap.luxuryTax,
+      firstApron: cap.firstApron,
+      secondApron: cap.secondApron,
+      // Rule 10.2 — the real maximum depends on years of service. This is the
+      // highest of the three, which is what a cap page shows as the ceiling.
+      maxPlayerSalary: cap.maxSalary10Plus,
     };
   }
 
-  private toSettingsPayload(
+  private async toSettingsPayload(
     settings: Prisma.LeagueSettingsGetPayload<object>,
+    seasonStartYear: number,
   ) {
+    const thresholds = await this.capThresholds(
+      settings.leagueId,
+      seasonStartYear,
+    );
+
     return {
       leagueId: settings.leagueId,
       setupMode: settings.setupMode,
@@ -376,8 +411,9 @@ export class LeagueService {
         },
         pregameLockMinutes: settings.pregameLockMinutes,
       },
-      // Derived, never stored: changing the cap must move them all at once.
-      thresholds: this.capThresholds(settings.salaryCap),
+      // Entered by the Super Admin each league year (Article 2), not worked
+      // out from the cap by a multiplier.
+      thresholds,
       updatedAt: settings.updatedAt,
     };
   }
@@ -453,10 +489,7 @@ export class LeagueService {
     };
   }
 
-  async createCalendarEvent(
-    leagueId: number,
-    payload: CreateCalendarEventDto,
-  ) {
+  async createCalendarEvent(leagueId: number, payload: CreateCalendarEventDto) {
     const league = await this.prisma.league.findUniqueOrThrow({
       where: { id: leagueId },
       select: { season: true },
@@ -574,22 +607,22 @@ export class LeagueService {
       orderBy: { startDate: 'asc' },
     });
 
-    const rows = (
-      events.length ? events : buildDefaultCalendar(source)
-    ).map((event) => ({
-      leagueId,
-      season: target,
-      title: event.title,
-      phase: event.phase,
-      description: event.description,
-      startDate: this.shiftYear(event.startDate),
-      endDate: event.endDate ? this.shiftYear(event.endDate) : null,
-      isApproximate: event.isApproximate,
-      displayLabel: event.displayLabel
-        ? this.shiftLabelYear(event.displayLabel)
-        : null,
-      isDefault: false,
-    }));
+    const rows = (events.length ? events : buildDefaultCalendar(source)).map(
+      (event) => ({
+        leagueId,
+        season: target,
+        title: event.title,
+        phase: event.phase,
+        description: event.description,
+        startDate: this.shiftYear(event.startDate),
+        endDate: event.endDate ? this.shiftYear(event.endDate) : null,
+        isApproximate: event.isApproximate,
+        displayLabel: event.displayLabel
+          ? this.shiftLabelYear(event.displayLabel)
+          : null,
+        isDefault: false,
+      }),
+    );
 
     await this.prisma.leagueCalendarEvent.createMany({ data: rows });
 

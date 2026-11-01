@@ -19,3 +19,190 @@ enum ManagementType {
   terms
   privacy
 }
+
+enum ScoringType {
+  headToHead9Cat
+}
+
+enum DraftType {
+  snake
+}
+
+enum LeagueVisibility {
+  private
+  public
+}
+
+enum LeagueContentType {
+  help
+  privacy
+  terms
+  about
+}
+
+enum NotificationType {
+  tradeProposal
+  freeAgency
+  announcement
+  lineupReminder
+  waiverResult
+  leagueInvite
+  system
+}
+
+enum LeagueSetupMode {
+  startup
+  import
+}
+
+enum FreeAgencyStyle {
+  dynamic
+  auction
+}
+
+enum HardCapThreshold {
+  none
+  luxuryTax
+  firstApron
+  secondApron
+}
+
+enum CalendarPhase {
+  leagueYear
+  freeAgency
+  contracts
+  nba
+  draft
+  roster
+  season
+  trades
+  playoffs
+  offseason
+}
+
+enum LeagueInviteStatus {
+  pending
+  accepted
+  declined
+  cancelled
+}
+
+enum LeaguePlayerStatus {
+  rostered
+  rightsHeld
+  freeAgent
+  waived
+}
+
+enum RosterSlotType {
+  standard
+  twoWay
+  injuredReserve
+}
+
+enum ContractSource {
+  import
+  startupSeed
+  signing
+  trade
+  commissionerEdit
+}
+
+enum ContractType {
+  standard
+  rookieScale
+  veteranMinimum
+  supermax
+  twoWay
+  nonGuaranteed
+  partiallyGuaranteed
+}
+
+enum SignedVia {
+  capSpace
+  nonTaxpayerMle
+  taxpayerMle
+  roomMle
+  biAnnualException
+  disabledPlayerException
+}
+
+enum ContractOptionType {
+  player
+  team
+  earlyTermination
+}
+
+enum GuaranteeType {
+  full
+  partial
+  none
+}
+
+enum NameMatchStatus {
+  matched
+  needsReview
+  notFound
+}
+
+enum NameMatchMethod {
+  exact
+  alias
+  fuzzy
+}
+
+enum ImportBatchStatus {
+  preview
+  confirmed
+  cancelled
+}
+
+enum ImportRowType {
+  contract
+  rights
+  deadCap
+  unknown
+}
+
+enum FreeAgencyOfferStatus {
+  pending
+  accepted
+  declined
+  withdrawn
+  expired
+}
+
+enum SyncJob {
+  teams
+  players
+}
+
+enum SyncStatus {
+  running
+  succeeded
+  failed
+}
+
+enum TradeStatus {
+  proposed
+  accepted
+  awaitingApproval
+  approved
+  rejected
+  declined
+  withdrawn
+  processed
+}
+
+enum TradeResponse {
+  pending
+  accepted
+  declined
+}
+
+// `draftPick` is deliberately absent: there is no DraftPick model yet, and an
+// enum value with nothing behind it is a trap for the next person.
+enum TradeAssetKind {
+  player
+  tradeException
+}

@@ -3,6 +3,7 @@ model User {
   email           String   @unique
   name            String
   phone           String
+  image           String?
   password        String
   role            Role     @default(user)
   isDeleted       Boolean  @default(false)
@@ -10,7 +11,18 @@ model User {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  createdLeagues  League[]
+  createdLeagues    League[]
   leagueMemberships LeagueMember[]
   teamMemberships   TeamMember[]
+  contentUpdates    LeagueContent[]
+  notifications     Notification[]
+
+  leagueInvitesReceived LeagueInvite[]    @relation("leagueInvitesReceived")
+  leagueInvitesSent     LeagueInvite[]    @relation("leagueInvitesSent")
+  playerAliasesCreated  PlayerAlias[]     @relation("playerAliasesCreated")
+  importBatchesUploaded ImportBatch[]     @relation("importBatchesUploaded")
+  freeAgencyOffersMade  FreeAgencyOffer[] @relation("freeAgencyOffersMade")
+  tradesProposed        Trade[]           @relation("tradesProposed")
+  tradesApproved        Trade[]           @relation("tradesApproved")
+  tradeResponses        TradeTeam[]       @relation("tradeResponses")
 }

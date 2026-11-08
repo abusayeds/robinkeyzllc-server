@@ -28,6 +28,32 @@ enum DraftType {
   snake
 }
 
+// Which of the two drafts a row belongs to. A startup draft runs once, when
+// the league is created; a rookie draft runs every league year.
+enum DraftKind {
+  startup
+  rookie
+}
+
+enum DraftFormat {
+  snake
+  linear
+}
+
+enum DraftStatus {
+  scheduled
+  inProgress
+  complete
+}
+
+// Rule 12.6 — what a trade says happens when a protection holds and the
+// original team keeps the pick.
+enum PickProtectionOutcome {
+  rollover
+  convert
+  end
+}
+
 enum LeagueVisibility {
   private
   public
@@ -58,6 +84,29 @@ enum LeagueSetupMode {
 enum FreeAgencyStyle {
   dynamic
   auction
+}
+
+// Article 4 — the two ceilings a move can buy. Distinct from
+// HardCapThreshold below, which is a league-wide commissioner option.
+enum HardCapApron {
+  firstApron
+  secondApron
+}
+
+// Rule 4.2 — every move in the table, named so the cap page can say which
+// one bought the ceiling.
+enum HardCapTrigger {
+  tookBackMoreSalary
+  signAndTradeAcquisition
+  tradeExceptionBelowFirstApron
+  nonTaxpayerMleAboveTaxpayerAmount
+  nonTaxpayerMleTradeOrClaim
+  biAnnualException
+  waivedPlayerAboveMle
+  aggregatedSalaries
+  tradeExceptionBetweenAprons
+  taxpayerMle
+  signAndTradeSendOut
 }
 
 enum HardCapThreshold {
@@ -175,6 +224,10 @@ enum FreeAgencyOfferStatus {
 enum SyncJob {
   teams
   players
+  // Real NBA games, from /v1/games.
+  games
+  // Per-player lines, from /v1/box_scores by date.
+  stats
 }
 
 enum SyncStatus {
@@ -200,9 +253,33 @@ enum TradeResponse {
   declined
 }
 
-// `draftPick` is deliberately absent: there is no DraftPick model yet, and an
-// enum value with nothing behind it is a trap for the next person.
 enum TradeAssetKind {
   player
   tradeException
+  draftPick
+}
+
+// A league's two halves. Fantasy conferences, not the NBA's: a team is put
+// in one when it is created and the commissioner can move it.
+enum Conference {
+  east
+  west
+}
+
+enum WeekPhase {
+  regular
+  playoffs
+}
+
+enum MatchupStatus {
+  upcoming
+  live
+  final
+}
+
+// Three rounds, four teams a conference — the bracket the design draws.
+enum PlayoffRound {
+  semifinal
+  conferenceFinal
+  championship
 }

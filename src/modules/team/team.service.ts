@@ -1,5 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { Prisma, TeamRole } from '@prisma/client';
+import { Prisma, TeamRole, Conference } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppError } from '../../common/errors/appError';
 import { NotificationService } from '../notification/notification.service';
@@ -69,6 +69,11 @@ export class TeamService {
       );
     }
 
+    // Conferences alternate as teams are added, so a league ends up balanced
+    // without the commissioner having to think about it. Moving a team
+    // afterwards is a normal edit.
+    const conference = existing % 2 === 0 ? Conference.east : Conference.west;
+
     const team = await this.write(() =>
       this.prisma.team.create({
         data: {
@@ -77,6 +82,7 @@ export class TeamService {
           abbr: payload.abbr.trim().toUpperCase(),
           color: payload.color ?? undefined,
           logo: payload.logo?.trim() || null,
+          conference,
         },
         include: { members: HOLDER_SELECT },
       }),
@@ -94,7 +100,8 @@ export class TeamService {
 
     const data: Prisma.TeamUpdateInput = {};
     if (payload.name !== undefined) data.name = payload.name.trim();
-    if (payload.abbr !== undefined) data.abbr = payload.abbr.trim().toUpperCase();
+    if (payload.abbr !== undefined)
+      data.abbr = payload.abbr.trim().toUpperCase();
     if (payload.color !== undefined) data.color = payload.color;
     if (payload.logo !== undefined) data.logo = payload.logo?.trim() || null;
 

@@ -1,0 +1,182 @@
+// Article 12 of the AVORA CBA, and the two drafts a dynasty league runs.
+//
+// A startup draft happens once, when the league is created: the teams divide
+// the whole NBA between them. A rookie draft happens every league year, and
+// only the new class is in the pool. The two are run the same way, so one
+// model carries both and `kind` says which.
+
+model LeagueDraft {
+  id       Int @id @default(autoincrement())
+  leagueId Int
+
+  kind DraftKind
+
+  // The league year the draft belongs to: 2026 means 2026-27. A startup draft
+  // has exactly one; a rookie draft has one per year.
+  seasonStartYear Int
+
+  rounds Int @default(2)
+
+  // Snake reverses the order from `reversalRound` on; linear keeps one order
+  // in every round.
+  format        DraftFormat @default(snake)
+  reversalRound Int         @default(2)
+
+  startsAt DateTime?
+  // The time zone the start time was entered in, e.g. "America/New_York".
+  // Stored as given, because the clock is read by people in several places and
+  // the label is part of what the commissioner set.
+  timezone String?
+
+  pickSeconds Int @default(120)
+
+  // Startup only: fill the order from the team list instead of by hand.
+  autoSetOrder Boolean @default(false)
+
+  status DraftStatus @default(scheduled)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  league League           @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  slots  DraftOrderSlot[]
+
+  // One startup draft and one rookie draft per league year.
+  @@unique([leagueId, kind, seasonStartYear])
+  @@index([leagueId])
+}
+
+// One row per pick in a draft's order. Rule 12.4 — in Version 1 the
+// commissioner sets this by hand.
+model DraftOrderSlot {
+  id      Int @id @default(autoincrement())
+  draftId Int
+
+  round       Int
+  pickInRound Int
+  // Stored rather than computed: once the commissioner has moved a row by
+  // hand, (round, pickInRound) no longer reproduces the running order.
+  overall     Int
+
+  // Who picks here. For a traded pick this is the current owner, not the team
+  // whose slot it was.
+  teamId Int
+
+  // The asset being used, when the slot is filled from the pick inventory.
+  draftPickId Int?
+
+  // Filled as the draft runs.
+  playerId Int?
+  pickedAt DateTime?
+
+  draft     LeagueDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  team      Team        @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  draftPick DraftPick?  @relation(fields: [draftPickId], references: [id], onDelete: SetNull)
+  player    Player?     @relation(fields: [playerId], references: [id], onDelete: SetNull)
+
+  @@unique([draftId, overall])
+  @@index([draftId, round])
+  @@index([teamId])
+  @@index([draftPickId])
+}
+
+// A future pick, which in a dynasty league is a tradeable asset in its own
+// right. One row per team per round per draft, created for the whole trading
+// window (Rule 12.1) so a pick exists to be traded before its draft is near.
+model DraftPick {
+  id       Int @id @default(autoincrement())
+  leagueId Int
+
+  // The draft it is used in: 2028 means the 2028-29 rookie draft.
+  seasonStartYear Int
+  round           Int
+
+  // The team the pick was born to. This never changes: every protection and
+  // the back-to-back rule (Rule 12.2) are read against the original team.
+  originalTeamId Int
+  currentTeamId  Int
+
+  // Rule 12.5 — a traded pick may be top-N protected: it changes hands only if
+  // it falls outside the top N of its round. Null means unprotected.
+  protectedTopN Int?
+
+  // Rule 12.6 — what happens when the protection holds. Null while the pick is
+  // unprotected.
+  protectionOutcome PickProtectionOutcome?
+
+  // Rule 12.7 — a rollover must name its final year. In that year the pick
+  // changes hands unprotected.
+  protectionFinalYear Int?
+
+  // Rule 12.6 — the pick a conversion turns into.
+  convertsToPickId Int?
+
+  // The team the protection owes the pick to, which is not always the current
+  // owner: while a protection holds, the original team keeps the pick and the
+  // obligation stays pointed at the other team.
+  owedToTeamId Int?
+
+  // Rules 8.10-8.14 — the season the pick was frozen, so the oldest frozen
+  // pick can unfreeze first. Written by the Second Apron engine, never by
+  // hand. Null means not frozen.
+  frozenInSeason Int?
+
+  // Rule 8.13 — a frozen pick that must be placed at the end of the first
+  // round. The commissioner moves it there when setting the order (Rule 12.4).
+  movedToEndOfRound Boolean @default(false)
+
+  // Free text on the pick: the trade reference, or the shorthand for terms the
+  // fields above cannot hold. Shown wherever the pick appears.
+  note String?
+
+  // Set once the pick has been used in a draft. A used pick leaves the
+  // inventory: it can no longer be traded, protected or frozen (Rule 8.11).
+  usedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  league       League           @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  originalTeam Team             @relation("draftPicksOriginal", fields: [originalTeamId], references: [id], onDelete: Cascade)
+  currentTeam  Team             @relation("draftPicksCurrent", fields: [currentTeamId], references: [id], onDelete: Cascade)
+  owedToTeam   Team?            @relation("draftPicksOwed", fields: [owedToTeamId], references: [id], onDelete: SetNull)
+  convertsTo   DraftPick?       @relation("pickConversion", fields: [convertsToPickId], references: [id], onDelete: SetNull)
+  convertedBy  DraftPick[]      @relation("pickConversion")
+  events       DraftPickEvent[]
+  slots        DraftOrderSlot[]
+  tradeAssets  TradeAsset[]
+
+  // A team has one pick per round per draft to begin with.
+  @@unique([leagueId, seasonStartYear, round, originalTeamId])
+  @@index([leagueId, seasonStartYear])
+  @@index([currentTeamId])
+  @@index([originalTeamId])
+}
+
+// Every hand a pick has passed through. Rule 12.10 — both teams' pages show
+// the terms and the current status, which means the trail has to be kept.
+model DraftPickEvent {
+  id     Int @id @default(autoincrement())
+  pickId Int
+
+  fromTeamId Int?
+  toTeamId   Int
+
+  // Why it moved: the trade reference or the commissioner's note.
+  reason String?
+
+  // Set when a trade moved it; null when a commissioner reassigned it by hand.
+  tradeId     Int?
+  actorUserId Int?
+
+  createdAt DateTime @default(now())
+
+  pick     DraftPick @relation(fields: [pickId], references: [id], onDelete: Cascade)
+  fromTeam Team?     @relation("pickEventsFrom", fields: [fromTeamId], references: [id], onDelete: SetNull)
+  toTeam   Team      @relation("pickEventsTo", fields: [toTeamId], references: [id], onDelete: Cascade)
+  trade    Trade?    @relation(fields: [tradeId], references: [id], onDelete: SetNull)
+  actor    User?     @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([pickId])
+  @@index([tradeId])
+}

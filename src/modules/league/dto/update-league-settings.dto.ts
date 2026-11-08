@@ -46,6 +46,14 @@ export class UpdateLeagueSettingsDto {
   @IsBoolean()
   allowDraftPickTrading?: boolean;
 
+  /** Rule 12.1 — how many drafts ahead a pick may be traded. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(10)
+  pickTradingWindowDrafts?: number;
+
   @IsOptional()
   @IsBoolean()
   commissionerTradeApproval?: boolean;

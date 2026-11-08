@@ -1,0 +1,49 @@
+// Article 4 — the hard cap.
+//
+// AVORA's Salary Cap is soft: a team may go over it. Some moves buy extra
+// flexibility, and the price is a ceiling the team cannot cross for the rest
+// of the league year, not even by a dollar (Rule 4.1).
+//
+// This is not `LeagueSettings.hardCapThreshold`, which is a league-wide option
+// a commissioner turns on. This is earned, per team, per league year, by one
+// of the moves in Rule 4.2's table.
+model TeamHardCap {
+  id       Int @id @default(autoincrement())
+  leagueId Int
+  teamId   Int
+
+  // Rule 4.6 — a hard cap lasts until the next rollover, and every team starts
+  // each league year without one. Holding the year is what makes that true
+  // without a scheduled job: a cap from a past year simply never matches.
+  seasonStartYear Int
+
+  // Rule 4.5 — First or Second Apron.
+  threshold HardCapApron
+
+  // Rule 4.2 — which move bought it. Kept because Rule 4.7 asks the cap page
+  // to explain the ceiling, and "you are hard-capped" without a reason is the
+  // kind of answer that generates a message to the commissioner.
+  trigger HardCapTrigger
+
+  // What the ceiling was worth the day it was set. The apron itself can be
+  // edited by a Super Admin mid-year, and a team should be able to see what it
+  // agreed to.
+  amountAtTrigger Int
+
+  note String?
+
+  sourceTradeId Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  league League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  trade  Trade? @relation(fields: [sourceTradeId], references: [id], onDelete: SetNull)
+
+  // One hard cap per team per league year. Rule 4.5 says the lower ceiling
+  // wins when a team triggers both, so a second trigger updates this row
+  // rather than adding another.
+  @@unique([teamId, seasonStartYear])
+  @@index([leagueId, seasonStartYear])
+}

@@ -29,6 +29,11 @@ model League {
   faOffers        FreeAgencyOffer[]
   trades          Trade[]
   tradeExceptions TradeException[]
+  drafts          LeagueDraft[]
+  draftPicks      DraftPick[]
+  hardCaps        TeamHardCap[]
+  scheduleWeeks   ScheduleWeek[]
+  matchups        Matchup[]
 
   @@index([createdById])
   @@index([visibility, isDeleted])

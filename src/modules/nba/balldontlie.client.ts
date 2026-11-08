@@ -45,6 +45,58 @@ export type BdlPlayer = {
   team: BdlTeam | null;
 };
 
+export type BdlGame = {
+  id: number;
+  date: string;
+  season: number;
+  status: string;
+  period: number;
+  postseason: boolean;
+  home_team_score: number;
+  visitor_team_score: number;
+  home_team: BdlTeam;
+  visitor_team: BdlTeam;
+};
+
+/** One player's line, the shape both /stats and /box_scores use. */
+export type BdlStatLine = {
+  min: string | null;
+  fgm: number | null;
+  fga: number | null;
+  fg3m: number | null;
+  fg3a: number | null;
+  ftm: number | null;
+  fta: number | null;
+  oreb: number | null;
+  dreb: number | null;
+  reb: number | null;
+  ast: number | null;
+  stl: number | null;
+  blk: number | null;
+  turnover: number | null;
+  pf: number | null;
+  pts: number | null;
+  player: { id: number };
+};
+
+/**
+ * A day's box scores. One game per entry, each side carrying its own lines.
+ *
+ * The endpoint is not paginated and not cursored: a date's games arrive in
+ * one response, which is why it is read with `get` rather than `paginate`.
+ */
+export type BdlBoxScore = {
+  id: number;
+  date: string;
+  season: number;
+  status: string;
+  postseason: boolean;
+  home_team_score: number;
+  visitor_team_score: number;
+  home_team: BdlTeam & { players: BdlStatLine[] };
+  visitor_team: BdlTeam & { players: BdlStatLine[] };
+};
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 @Injectable()
@@ -150,5 +202,26 @@ export class BalldontlieClient {
    */
   activePlayers(startCursor?: string) {
     return this.paginate<BdlPlayer>('/v1/players/active', {}, startCursor);
+  }
+
+  /** Every game between two dates, inclusive. Free tier. */
+  games(startDate: string, endDate: string, startCursor?: string) {
+    return this.paginate<BdlGame>(
+      '/v1/games',
+      { start_date: startDate, end_date: endDate },
+      startCursor,
+    );
+  }
+
+  /**
+   * Every line played on one date, in one request.
+   *
+   * GOAT only, and the reason the nightly job is cheap: the alternative,
+   * /v1/stats, is asked per player and would be hundreds of requests for the
+   * same information.
+   */
+  async boxScores(date: string): Promise<BdlBoxScore[]> {
+    const page = await this.get<BdlBoxScore>('/v1/box_scores', { date });
+    return page.data ?? [];
   }
 }

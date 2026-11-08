@@ -2,6 +2,7 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { AppError } from '../../common/errors/appError';
 import { PrismaService } from '../../prisma/prisma.service';
+import { BirthdateRow, readBirthdateFile } from './player.birthdates';
 import { normalizePlayerName } from './player.normalize';
 import {
   NameMatchMethod,
@@ -19,6 +20,19 @@ const AUTO_ACCEPT = 0.9;
 
 /** How many near misses the preview offers when it cannot decide. */
 const CANDIDATE_LIMIT = 3;
+
+/** How many birthdates go into one UPDATE. The client's file is one chunk. */
+const BIRTHDATE_CHUNK = 1000;
+
+/** A birthdate row the Super Admin has to look at. */
+type BirthdateProblem = {
+  lineNumber: number;
+  player: string;
+  birthdate: string;
+  status: NameMatchStatus | 'invalid' | 'conflict';
+  message: string;
+  candidates: PlayerCandidate[];
+};
 
 const PLAYER_SELECT = {
   id: true,
@@ -250,6 +264,167 @@ export class PlayerService {
       throw new AppError(HttpStatus.NOT_FOUND, 'Player not found');
     }
     return player;
+  }
+
+  /**
+   * Loads birthdates from the Super Admin's two-column file.
+   *
+   * balldontlie does not carry a birthdate, so this is the only way one ever
+   * reaches a player row. It is global, not per league, and the client asked
+   * for it to run once for the whole platform and then again for each rookie
+   * class — so it is written to be re-run safely: a name already carrying the
+   * same date is reported as unchanged rather than written again.
+   *
+   * `dryRun` reads the file and reports exactly what would happen without
+   * touching a row.
+   */
+  async importBirthdates(text: string, dryRun: boolean) {
+    const file = readBirthdateFile(text);
+    if (file.fileIssues.length > 0) {
+      throw new AppError(HttpStatus.BAD_REQUEST, file.fileIssues.join(' '));
+    }
+
+    const problems: BirthdateProblem[] = [];
+    const readable: BirthdateRow[] = [];
+
+    for (const row of file.rows) {
+      if (row.issue || !row.birthdate) {
+        problems.push({
+          lineNumber: row.lineNumber,
+          player: row.player,
+          birthdate: row.rawBirthdate,
+          status: 'invalid',
+          message: row.issue ?? 'The birthdate could not be read.',
+          candidates: [],
+        });
+        continue;
+      }
+      readable.push(row);
+    }
+
+    const matches = await this.matchNames(readable.map((row) => row.player));
+
+    // playerId -> the first row that claimed it, so a second row naming the
+    // same player with a different date can be reported instead of one
+    // silently overwriting the other.
+    const claimed = new Map<number, BirthdateRow>();
+    const resolved: { row: BirthdateRow; playerId: number }[] = [];
+
+    readable.forEach((row, index) => {
+      const match = matches[index];
+
+      if (match.status === NameMatchStatus.notFound) {
+        problems.push({
+          lineNumber: row.lineNumber,
+          player: row.player,
+          birthdate: row.rawBirthdate,
+          status: NameMatchStatus.notFound,
+          message: `No player matches "${row.player}".`,
+          candidates: [],
+        });
+        return;
+      }
+      if (match.status === NameMatchStatus.needsReview || !match.playerId) {
+        problems.push({
+          lineNumber: row.lineNumber,
+          player: row.player,
+          birthdate: row.rawBirthdate,
+          status: NameMatchStatus.needsReview,
+          message: `More than one player could be "${row.player}".`,
+          candidates: match.candidates,
+        });
+        return;
+      }
+
+      const first = claimed.get(match.playerId);
+      if (first) {
+        if (first.birthdate?.getTime() !== row.birthdate?.getTime()) {
+          problems.push({
+            lineNumber: row.lineNumber,
+            player: row.player,
+            birthdate: row.rawBirthdate,
+            status: 'conflict',
+            message: `Line ${first.lineNumber} gives the same player a different birthdate (${first.rawBirthdate}).`,
+            candidates: [],
+          });
+        }
+        // A repeat of the same date is harmless, and is already queued.
+        return;
+      }
+
+      claimed.set(match.playerId, row);
+      resolved.push({ row, playerId: match.playerId });
+    });
+
+    const existing = await this.prisma.player.findMany({
+      where: { id: { in: resolved.map((item) => item.playerId) } },
+      select: { id: true, birthdate: true },
+    });
+    const birthdateById = new Map(
+      existing.map((player) => [player.id, player.birthdate]),
+    );
+
+    const changes = resolved.filter(
+      ({ row, playerId }) =>
+        birthdateById.get(playerId)?.getTime() !== row.birthdate?.getTime(),
+    );
+
+    if (!dryRun && changes.length > 0) {
+      await this.writeBirthdates(
+        changes.map(({ row, playerId }) => ({
+          playerId,
+          birthdate: row.birthdate as Date,
+        })),
+      );
+    }
+
+    return {
+      dryRun,
+      rowCount: file.rows.length,
+      applied: dryRun ? 0 : changes.length,
+      wouldChange: changes.length,
+      unchanged: resolved.length - changes.length,
+      needsReview: problems.filter(
+        (problem) => problem.status === NameMatchStatus.needsReview,
+      ).length,
+      notFound: problems.filter(
+        (problem) => problem.status === NameMatchStatus.notFound,
+      ).length,
+      invalid: problems.filter((problem) => problem.status === 'invalid')
+        .length,
+      conflicts: problems.filter((problem) => problem.status === 'conflict')
+        .length,
+      ignoredColumns: file.ignoredColumns,
+      // Only the rows that need a human. A matched row has nothing to say, and
+      // five hundred of them would bury the handful that do.
+      problems: problems.sort((a, b) => a.lineNumber - b.lineNumber),
+    };
+  }
+
+  /**
+   * One statement per chunk rather than one per player: a few hundred
+   * round trips would outlast an interactive transaction, and this is already
+   * atomic without one.
+   */
+  private async writeBirthdates(
+    updates: { playerId: number; birthdate: Date }[],
+  ) {
+    for (let i = 0; i < updates.length; i += BIRTHDATE_CHUNK) {
+      const chunk = updates.slice(i, i + BIRTHDATE_CHUNK);
+      const values = Prisma.join(
+        chunk.map(
+          (update) =>
+            Prisma.sql`(${update.playerId}::int, ${update.birthdate}::date)`,
+        ),
+      );
+
+      await this.prisma.$executeRaw`
+        UPDATE "Player" AS p
+        SET "birthdate" = v."birthdate"
+        FROM (VALUES ${values}) AS v("id", "birthdate")
+        WHERE p."id" = v."id"
+      `;
+    }
   }
 
   private async fuzzyCandidates(normalized: string) {

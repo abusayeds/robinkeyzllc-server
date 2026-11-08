@@ -35,6 +35,8 @@ model Trade {
   approvedBy User?            @relation("tradesApproved", fields: [approvedById], references: [id], onDelete: SetNull)
   teams      TradeTeam[]
   assets     TradeAsset[]
+  pickEvents DraftPickEvent[]
+  hardCaps   TeamHardCap[]
   exceptions TradeException[]
 
   @@index([leagueId, status])
@@ -73,6 +75,7 @@ model TradeAsset {
 
   leaguePlayerId   Int?
   tradeExceptionId Int?
+  draftPickId      Int?
 
   // The salary this asset carries for matching purposes, frozen at proposal
   // time. A contract edited afterwards must not silently change what the
@@ -84,9 +87,11 @@ model TradeAsset {
   toTeam         Team            @relation("tradeAssetsIn", fields: [toTeamId], references: [id], onDelete: Cascade)
   leaguePlayer   LeaguePlayer?   @relation(fields: [leaguePlayerId], references: [id], onDelete: SetNull)
   tradeException TradeException? @relation("tradeExceptionMoved", fields: [tradeExceptionId], references: [id], onDelete: SetNull)
+  draftPick      DraftPick?      @relation(fields: [draftPickId], references: [id], onDelete: SetNull)
 
   @@index([tradeId])
   @@index([leaguePlayerId])
+  @@index([draftPickId])
 }
 
 // A traded player exception: room a team may use later, created when it sends

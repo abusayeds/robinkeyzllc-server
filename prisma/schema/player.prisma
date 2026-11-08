@@ -29,7 +29,9 @@ model NbaTeam {
   updatedAt DateTime  @updatedAt
   syncedAt  DateTime?
 
-  players Player[]
+  players   Player[]
+  gamesHome NbaGame[] @relation("nbaGamesHome")
+  gamesAway NbaGame[] @relation("nbaGamesVisitor")
 }
 
 model Player {
@@ -78,11 +80,13 @@ model Player {
   updatedAt DateTime  @updatedAt
   syncedAt  DateTime?
 
-  nbaTeam       NbaTeam?       @relation(fields: [nbaTeamId], references: [id], onDelete: SetNull)
+  nbaTeam       NbaTeam?         @relation(fields: [nbaTeamId], references: [id], onDelete: SetNull)
   aliases       PlayerAlias[]
   leaguePlayers LeaguePlayer[]
   deadMoney     DeadMoney[]
   importRows    ImportRow[]
+  draftSlots    DraftOrderSlot[]
+  gameStats     PlayerGameStat[]
 
   @@index([nameNormalized])
   // Declared here, not only in SQL: without it Prisma treats the trigram index

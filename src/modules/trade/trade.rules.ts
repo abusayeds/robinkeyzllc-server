@@ -1,3 +1,11 @@
+import { HardCapTrigger } from '@prisma/client';
+import {
+  APRON_LABEL,
+  HARD_CAP_TRIGGERS,
+  canTakeOnHardCap,
+  hardCapCheck,
+  type HardCapState,
+} from '../cap/cap.hardcap';
 import type { EffectiveCap } from '../cap/cap.service';
 import {
   maxIncomingSalary,
@@ -34,6 +42,8 @@ export type TradeSide = {
   /** Everything this team owes this season, before the trade. */
   committed: number;
   isRepeatTaxpayer: boolean;
+  /** Article 4 — the ceiling this team already carries, if any. */
+  hardCap: HardCapState | null;
 };
 
 export type TradeContext = {
@@ -42,6 +52,10 @@ export type TradeContext = {
   apronRules: boolean;
   deadlinePassed: boolean;
   deadlineLabel: string | null;
+  /** Rule 4.8 — the league's roster minimum, two-way players excluded. */
+  rosterMinimum: number;
+  /** What one open roster spot has to be reserved against (Rule 4.8). */
+  rookieMinimum: number;
 };
 
 const money = (value: number) =>
@@ -154,18 +168,49 @@ export function checkTrade(
         });
       }
 
-      // Rules 4.2 and 5.4 — taking back more than 100% hard-caps the team at
-      // the First Apron, and the move itself must leave it at or below that
-      // apron.
+      // Rule 4.2 — the moves in this trade that would buy a hard cap. Only
+      // the lowest ceiling matters (Rule 4.5), and `canTakeOnHardCap` folds
+      // in any cap the team already carries.
+      const triggers: HardCapTrigger[] = [];
       if (side.incoming > side.outgoing && tier !== TIER.belowCap) {
-        const underFirstApron = after <= cap.firstApron;
+        triggers.push(HardCapTrigger.tookBackMoreSalary);
+      }
+      if (side.outgoingPlayerCount > 1 && tools.canAggregate) {
+        triggers.push(HardCapTrigger.aggregatedSalaries);
+      }
+
+      const reserve = {
+        teamSalaryAfter: after,
+        rosterAfter: roster,
+        rosterMinimum: context.rosterMinimum,
+        rookieMinimum: context.rookieMinimum,
+      };
+
+      for (const trigger of triggers) {
+        const result = canTakeOnHardCap(
+          trigger,
+          reserve,
+          cap,
+          side.hardCap?.apron ?? null,
+        );
         checks.push({
           teamId: side.teamId,
-          label: `${side.teamName} can carry a First Apron hard cap`,
-          pass: underFirstApron,
-          detail: underFirstApron
-            ? `Taking back more than it sends hard-caps the team at ${money(cap.firstApron)} for the rest of the league year.`
-            : `Taking back more than it sends hard-caps the team at the First Apron, but it finishes at ${money(after)}.`,
+          label: `${side.teamName} can carry a ${APRON_LABEL[result.apron!]} hard cap`,
+          pass: result.pass,
+          detail: `${HARD_CAP_TRIGGERS[trigger].label} caps the team at ${money(result.ceiling!)} for the rest of the league year. ${result.message}`,
+        });
+      }
+
+      // Rules 4.3 and 4.8 — a team that is already hard-capped is measured
+      // against its ceiling on every later move, reserve included, even when
+      // this trade buys no new cap.
+      if (side.hardCap && triggers.length === 0) {
+        const result = hardCapCheck(side.hardCap, reserve);
+        checks.push({
+          teamId: side.teamId,
+          label: `${side.teamName} stays under its ${APRON_LABEL[side.hardCap.apron]} hard cap`,
+          pass: result.pass,
+          detail: result.message,
         });
       }
     }

@@ -1,0 +1,99 @@
+// Real NBA games and the per-player lines they produced.
+//
+// Global, like `Player` and `NbaTeam`: a league never owns a stat row, it only
+// adds up the rows belonging to the players it rosters. One nightly pull feeds
+// every league at once.
+//
+// Source: balldontlie `/v1/games` (free) for the schedule and `/v1/box_scores`
+// (GOAT) for the lines. Box scores are pulled by date rather than by player:
+// one request returns every line played that day.
+
+model NbaGame {
+  id Int @id @default(autoincrement())
+
+  // balldontlie's own id, what the sync upserts on.
+  bdlGameId Int @unique
+
+  // The calendar date of the game, not an instant. A game belongs to the night
+  // it was played whatever time zone the reader is in, and a fantasy week is
+  // a range of these dates.
+  date DateTime @db.Date
+
+  // The season's starting year, as balldontlie gives it: 2024 means 2024-25.
+  season Int
+
+  // balldontlie's own words — "Final", "In Progress", a tip-off time for a
+  // game that has not started. Only a final game's lines are settled on.
+  status     String
+  period     Int     @default(0)
+  postseason Boolean @default(false)
+
+  homeTeamScore    Int @default(0)
+  visitorTeamScore Int @default(0)
+
+  homeNbaTeamId    Int
+  visitorNbaTeamId Int
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  syncedAt  DateTime?
+
+  homeNbaTeam    NbaTeam          @relation("nbaGamesHome", fields: [homeNbaTeamId], references: [id], onDelete: Cascade)
+  visitorNbaTeam NbaTeam          @relation("nbaGamesVisitor", fields: [visitorNbaTeamId], references: [id], onDelete: Cascade)
+  playerStats    PlayerGameStat[]
+
+  @@index([date])
+  @@index([season, date])
+}
+
+// One player's line from one game.
+//
+// Makes and attempts are stored, never the percentages. A week's FG% is the
+// week's makes over the week's attempts; averaging a set of per-game
+// percentages gives a different and wrong number, and it is the commonest bug
+// in category scoring.
+model PlayerGameStat {
+  id       Int @id @default(autoincrement())
+  playerId Int
+  gameId   Int
+
+  // Carried on the row although the game holds them too, because every query
+  // here is "this player, between these two dates" and that should not need a
+  // join to answer.
+  gameDate DateTime @db.Date
+  season   Int
+
+  // Minutes as balldontlie sends them ("32:14"), kept as text. Nothing scores
+  // on minutes; it is shown so an owner can see why a line is thin.
+  minutes String?
+
+  fgm  Int @default(0)
+  fga  Int @default(0)
+  ftm  Int @default(0)
+  fta  Int @default(0)
+  fg3m Int @default(0)
+  fg3a Int @default(0)
+
+  pts      Int @default(0)
+  reb      Int @default(0)
+  oreb     Int @default(0)
+  dreb     Int @default(0)
+  ast      Int @default(0)
+  stl      Int @default(0)
+  blk      Int @default(0)
+  turnover Int @default(0)
+  pf       Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  player Player  @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  game   NbaGame @relation(fields: [gameId], references: [id], onDelete: Cascade)
+
+  // A player has one line per game. Re-running a date corrects the row rather
+  // than adding a second one, which is what makes the nightly job safe to
+  // repeat.
+  @@unique([playerId, gameId])
+  @@index([playerId, gameDate])
+  @@index([gameDate])
+}

@@ -1,10 +1,20 @@
 model Team {
-  id        Int      @id @default(autoincrement())
-  leagueId  Int
-  name      String
-  abbr      String
-  color     String   @default("#2563EB")
-  logo      String?
+  id       Int     @id @default(autoincrement())
+  leagueId Int
+  name     String
+  abbr     String
+  color    String  @default("#2563EB")
+  logo     String?
+
+  // Which half of the league the team plays in. Assigned when the team is
+  // created, alternating, so a league is balanced without anybody having to
+  // think about it; the commissioner can move a team afterwards.
+  conference Conference @default(east)
+
+  // Optional. When a league has no divisions the standings table's Div
+  // column falls back to the team's record inside its conference, which is
+  // the only other grouping there is.
+  division  String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -20,6 +30,18 @@ model Team {
   tradeAssetsOut  TradeAsset[]      @relation("tradeAssetsOut")
   tradeAssetsIn   TradeAsset[]      @relation("tradeAssetsIn")
   tradeExceptions TradeException[]
+
+  draftOrderSlots  DraftOrderSlot[]
+  draftPicksOrigin DraftPick[]       @relation("draftPicksOriginal")
+  draftPicksHeld   DraftPick[]       @relation("draftPicksCurrent")
+  draftPicksOwed   DraftPick[]       @relation("draftPicksOwed")
+  pickEventsFrom   DraftPickEvent[]  @relation("pickEventsFrom")
+  pickEventsTo     DraftPickEvent[]  @relation("pickEventsTo")
+  hardCaps         TeamHardCap[]
+  matchupsHome     Matchup[]         @relation("matchupsHome")
+  matchupsAway     Matchup[]         @relation("matchupsAway")
+  matchupsWon      Matchup[]         @relation("matchupsWon")
+  matchupStats     MatchupTeamStat[]
 
   @@unique([leagueId, name])
   @@unique([leagueId, abbr])

@@ -16,6 +16,9 @@ model LeagueSettings {
   allowTradeExceptions        Boolean @default(true)
   allowTradingTradeExceptions Boolean @default(true)
   allowDraftPickTrading       Boolean @default(true)
+  // Rule 12.1 — picks may be traded this many drafts ahead. The commissioner
+  // may change it; 7 is the rule book's own number.
+  pickTradingWindowDrafts     Int     @default(7)
   commissionerTradeApproval   Boolean @default(false)
 
   // Rule 2.1 — a league uses either the app's default figures, maintained by

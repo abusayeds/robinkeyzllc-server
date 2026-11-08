@@ -4,6 +4,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { AppError } from '../../common/errors/appError';
 import { parseSeasonLabel } from '../../utils/season';
 import { CapService } from '../cap/cap.service';
+import { HardCapService } from '../cap/hard-cap.service';
 import { NotificationService } from '../notification/notification.service';
 import { buildDefaultCalendar, nextSeason } from './calendar.template';
 import {
@@ -29,6 +30,7 @@ export class LeagueService {
     private prisma: PrismaService,
     private readonly notificationService: NotificationService,
     private readonly capService: CapService,
+    private readonly hardCap: HardCapService,
   ) {}
   private currentSeason(now = new Date()) {
     const year = now.getFullYear();
@@ -232,12 +234,19 @@ export class LeagueService {
 
     if (!memberships.length) return [];
 
-    // One extra query instead of one per member.
+    // One extra query instead of one per member. The team comes along: a
+    // member list that says someone holds a team without saying which one
+    // makes every caller look it up again.
     const teamMembers = await this.prisma.teamMember.findMany({
       where: { leagueId },
-      select: { userId: true },
+      select: {
+        userId: true,
+        team: { select: { id: true, name: true, abbr: true, logo: true } },
+      },
     });
-    const withTeam = new Set(teamMembers.map((member) => member.userId));
+    const teamByUserId = new Map(
+      teamMembers.map((member) => [member.userId, member.team]),
+    );
 
     return memberships.map((membership) => ({
       userId: membership.user.id,
@@ -245,7 +254,8 @@ export class LeagueService {
       email: membership.user.email,
       image: membership.user.image,
       role: membership.role,
-      hasTeam: withTeam.has(membership.user.id),
+      hasTeam: teamByUserId.has(membership.user.id),
+      team: teamByUserId.get(membership.user.id) ?? null,
       joinedAt: membership.createdAt,
     }));
   }
@@ -391,6 +401,7 @@ export class LeagueService {
         allowTradeExceptions: settings.allowTradeExceptions,
         allowTradingTradeExceptions: settings.allowTradingTradeExceptions,
         allowDraftPickTrading: settings.allowDraftPickTrading,
+        pickTradingWindowDrafts: settings.pickTradingWindowDrafts,
         commissionerTradeApproval: settings.commissionerTradeApproval,
       },
       salaryCap: settings.salaryCap,
@@ -626,7 +637,19 @@ export class LeagueService {
 
     await this.prisma.leagueCalendarEvent.createMany({ data: rows });
 
-    return { season: target, created: rows.length };
+    // Rule 4.6 — every team starts the new league year with no hard cap. A
+    // cap is keyed to its own year, so last year's rows already match nothing;
+    // this clears them away rather than leaving them to pile up.
+    const targetYear = parseSeasonLabel(target);
+    const hardCaps = targetYear
+      ? await this.hardCap.clearForRollover(leagueId, targetYear)
+      : { cleared: 0 };
+
+    return {
+      season: target,
+      created: rows.length,
+      hardCapsCleared: hardCaps.cleared,
+    };
   }
 
   // Kept in UTC so a deadline does not move a day depending on the server.

@@ -48,5 +48,7 @@ export type TLeagueMember = {
   image: string | null;
   role: LeagueRole;
   hasTeam: boolean;
+  /** The team they manage in this league, or null when they hold none. */
+  team: { id: number; name: string; abbr: string; logo: string | null } | null;
   joinedAt: Date;
 };

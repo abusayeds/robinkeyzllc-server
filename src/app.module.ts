@@ -1,5 +1,6 @@
 import { Module, NestModule, MiddlewareConsumer } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { HttpLoggerMiddleware } from './common/middleware/http-logger.middleware';
 import { PrismaModule } from './prisma/prisma.module';
 import { AppController } from './app.controller';
@@ -22,6 +23,10 @@ import { OverviewModule } from './modules/overview/overview.module';
 import { NbaModule } from './modules/nba/nba.module';
 import { TradeModule } from './modules/trade/trade.module';
 import { CapModule } from './modules/cap/cap.module';
+import { DraftModule } from './modules/draft/draft.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { ScoringModule } from './modules/scoring/scoring.module';
+import { TransactionsModule } from './modules/transactions/transactions.module';
 
 @Module({
   imports: [
@@ -29,6 +34,8 @@ import { CapModule } from './modules/cap/cap.module';
       isGlobal: true,
       envFilePath: '.env',
     }),
+    // Drives the nightly NBA pull and the week settlement that follows it.
+    ScheduleModule.forRoot(),
     PrismaModule,
     CapModule,
     OtpModule,
@@ -49,6 +56,10 @@ import { CapModule } from './modules/cap/cap.module';
     OverviewModule,
     NbaModule,
     TradeModule,
+    DraftModule,
+    DashboardModule,
+    ScoringModule,
+    TransactionsModule,
   ],
   controllers: [AppController],
 })

@@ -1,0 +1,136 @@
+// A league's season: its weeks, its head-to-head matchups, and what each team
+// actually put up in them.
+//
+// AVORA scores nine categories head to head (`League.scoringType`). A week is
+// the unit: every rostered player's lines between the week's two dates are
+// added up, the two teams' nine totals are compared, and the team that wins
+// more categories wins the week.
+
+model ScheduleWeek {
+  id              Int @id @default(autoincrement())
+  leagueId        Int
+  seasonStartYear Int
+
+  // 1-based and continuous across the season, playoff weeks included, because
+  // "Week 23" has to mean one thing on every screen.
+  weekNumber Int
+
+  // Inclusive calendar dates. A player's line counts for the week that
+  // contains the night it was played.
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+
+  phase WeekPhase @default(regular)
+
+  // Settling is what turns raw lines into a result. It happens once: a trade
+  // the following week must not change who won last week, so the totals are
+  // written down rather than worked out again on every read.
+  isSettled Boolean   @default(false)
+  settledAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  league   League    @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  matchups Matchup[]
+
+  @@unique([leagueId, seasonStartYear, weekNumber])
+  @@index([leagueId, seasonStartYear, startDate])
+}
+
+// One week, two teams.
+//
+// Playoff rounds are matchups too, created empty when the bracket is drawn so
+// the later rounds can be shown as TBD before their teams are known. That is
+// why the team ids are nullable here and nowhere else.
+model Matchup {
+  id       Int @id @default(autoincrement())
+  leagueId Int
+  weekId   Int
+
+  homeTeamId Int?
+  awayTeamId Int?
+
+  // Only set for playoff matchups, where the bracket shows them.
+  homeSeed Int?
+  awaySeed Int?
+
+  playoffRound      PlayoffRound?
+  // Null on the championship, which belongs to neither conference.
+  playoffConference Conference?
+
+  status MatchupStatus @default(upcoming)
+
+  // The result, in categories. Nine of them, so these three always add to 9
+  // once the week is settled.
+  homeCategoryWins Int @default(0)
+  awayCategoryWins Int @default(0)
+  tiedCategories   Int @default(0)
+
+  // Null while the week is open, and on a drawn week.
+  winnerTeamId Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  league    League            @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  week      ScheduleWeek      @relation(fields: [weekId], references: [id], onDelete: Cascade)
+  homeTeam  Team?             @relation("matchupsHome", fields: [homeTeamId], references: [id], onDelete: SetNull)
+  awayTeam  Team?             @relation("matchupsAway", fields: [awayTeamId], references: [id], onDelete: SetNull)
+  winner    Team?             @relation("matchupsWon", fields: [winnerTeamId], references: [id], onDelete: SetNull)
+  teamStats MatchupTeamStat[]
+
+  @@index([leagueId, weekId])
+  @@index([homeTeamId])
+  @@index([awayTeamId])
+}
+
+// What one team put up in one matchup, written when the week is settled.
+//
+// This is the snapshot the whole season reads from. A player traded away in
+// March must not move the points he scored in December, and recomputing from
+// today's roster would do exactly that.
+model MatchupTeamStat {
+  id        Int @id @default(autoincrement())
+  matchupId Int
+  teamId    Int
+
+  // Makes and attempts, so a range of weeks can be re-totalled correctly:
+  // percentages cannot be averaged (see `stats.prisma`).
+  fgm  Int @default(0)
+  fga  Int @default(0)
+  ftm  Int @default(0)
+  fta  Int @default(0)
+  fg3m Int @default(0)
+
+  pts      Int @default(0)
+  reb      Int @default(0)
+  ast      Int @default(0)
+  stl      Int @default(0)
+  blk      Int @default(0)
+  turnover Int @default(0)
+
+  // Categories taken off the opponent this week, 0-9. The weekly table's
+  // head-to-head column.
+  categoryWins Int @default(0)
+
+  // The league-wide weekly score: in each of the nine categories every team
+  // is ranked against all the others and given (teams - rank + 1) points, so
+  // the best possible week is 9 x the number of teams. It is a standing of
+  // the whole league that week, not of this matchup, which is why it can only
+  // be worked out once every team's totals are in.
+  weekPoints Int @default(0)
+
+  // How many of the team's players actually played. A thin week is usually
+  // this, not a bad roster.
+  playerCount Int @default(0)
+  gamesPlayed Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  matchup Matchup @relation(fields: [matchupId], references: [id], onDelete: Cascade)
+  team    Team    @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([matchupId, teamId])
+  @@index([teamId])
+}

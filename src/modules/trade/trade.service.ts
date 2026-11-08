@@ -13,6 +13,8 @@ import { AppError } from '../../common/errors/appError';
 import { PrismaService } from '../../prisma/prisma.service';
 import { parseSeasonLabel } from '../../utils/season';
 import { CapService } from '../cap/cap.service';
+import { HardCapService } from '../cap/hard-cap.service';
+import { HardCapTrigger } from '@prisma/client';
 import { ProposeTradeDto } from './dto/propose-trade.dto';
 import {
   checkTrade,
@@ -75,6 +77,7 @@ export class TradeService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly cap: CapService,
+    private readonly hardCap: HardCapService,
   ) {}
 
   async list(leagueId: number, status?: TradeStatus, teamId?: number) {
@@ -151,6 +154,8 @@ export class TradeService {
       apronRules: league.apronRules,
       deadlinePassed: league.deadlinePassed,
       deadlineLabel: league.deadlineLabel,
+      rosterMinimum: league.rosterMinimum,
+      rookieMinimum: league.rookieMinimum,
     });
 
     const trade = await this.prisma.$transaction(async (tx) => {
@@ -434,7 +439,33 @@ export class TradeService {
           maxRosterSize: 0,
           committed: 0,
           isRepeatTaxpayer: false,
+          hardCap: null,
         });
+
+        // Rule 4.2 — the ceiling is bought by the move, so it is written
+        // with the move. The checks at proposal time already refused a trade
+        // that could not carry it.
+        if (league.apronRules) {
+          const triggers: HardCapTrigger[] = [];
+          if (incoming > out.reduce((sum, a) => sum + a.salary, 0)) {
+            triggers.push(HardCapTrigger.tookBackMoreSalary);
+          }
+          if (outgoingSalaries.length > 1) {
+            triggers.push(HardCapTrigger.aggregatedSalaries);
+          }
+
+          for (const trigger of triggers) {
+            await this.hardCap.apply({
+              leagueId,
+              teamId: row.teamId,
+              seasonStartYear: league.seasonStartYear,
+              trigger,
+              cap: league.cap,
+              sourceTradeId: trade.id,
+              tx,
+            });
+          }
+        }
 
         if (value !== null && league.allowTradeExceptions) {
           await tx.tradeException.create({
@@ -600,6 +631,14 @@ export class TradeService {
   ): Promise<TradeSide[]> {
     const sides: TradeSide[] = [];
 
+    // One query for the whole trade: a hard cap is read for every side, and
+    // three teams would otherwise be three round trips.
+    const hardCaps = await this.hardCap.forLeague(
+      leagueId,
+      league.seasonStartYear,
+      league.cap,
+    );
+
     for (const team of teams) {
       const [years, dead, holds, roster] = await Promise.all([
         this.prisma.contractYear.findMany({
@@ -663,6 +702,7 @@ export class TradeService {
         // team is a Repeat Taxpayer until that is built. Recorded in
         // 11-cba-spec.md rather than guessed at.
         isRepeatTaxpayer: false,
+        hardCap: hardCaps.get(team.id) ?? null,
       });
     }
 
@@ -698,6 +738,9 @@ export class TradeService {
       cap,
       salaryCap: cap.salaryCap,
       maxRosterSize: league.settings?.maxRosterSize ?? 15,
+      // Rule 4.8 — the reserve is counted against the league's own minimum.
+      rosterMinimum: league.settings?.minRosterSize ?? 0,
+      rookieMinimum: await this.hardCap.rookieMinimum(cap),
       salaryMatching: league.settings?.salaryMatching ?? false,
       apronRules: league.settings?.apronRules ?? false,
       allowTradeExceptions: league.settings?.allowTradeExceptions ?? false,

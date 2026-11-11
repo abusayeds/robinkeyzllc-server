@@ -38,6 +38,15 @@ export class TradeAssetDto {
   @IsInt()
   @Min(1)
   tradeExceptionId?: number;
+
+  // Article 12 — a future pick is an asset in its own right in a dynasty
+  // league. Whether this particular one may move is Rule 12.11's question,
+  // and the service asks it rather than trusting the client.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  draftPickId?: number;
 }
 
 export class ProposeTradeDto {

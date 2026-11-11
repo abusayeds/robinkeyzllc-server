@@ -15,6 +15,12 @@ import { parseSeasonLabel } from '../../utils/season';
 import { CapService } from '../cap/cap.service';
 import { HardCapService } from '../cap/hard-cap.service';
 import { HardCapTrigger } from '@prisma/client';
+import {
+  UNTRADEABLE_MESSAGE,
+  draftYearLabel,
+  roundLabel,
+  untradeableReason,
+} from '../draft/draft.rules';
 import { ProposeTradeDto } from './dto/propose-trade.dto';
 import {
   checkTrade,
@@ -26,6 +32,9 @@ import {
 
 /** How long an exception earned in a trade lasts. */
 const EXCEPTION_DAYS = 365;
+
+/** Rule 12.1 — seven drafts ahead, unless the commissioner has changed it. */
+const DEFAULT_PICK_WINDOW = 7;
 
 const TRADE_SELECT = {
   id: true,
@@ -66,6 +75,15 @@ const TRADE_SELECT = {
         },
       },
       tradeException: { select: { id: true, label: true, remaining: true } },
+      draftPick: {
+        select: {
+          id: true,
+          seasonStartYear: true,
+          round: true,
+          protectedTopN: true,
+          originalTeam: { select: { id: true, abbr: true } },
+        },
+      },
     },
   },
 } satisfies Prisma.TradeSelect;
@@ -376,6 +394,7 @@ export class TradeService {
             salary: true,
             leaguePlayerId: true,
             tradeExceptionId: true,
+            draftPickId: true,
           },
         },
         teams: { select: { teamId: true, team: { select: { name: true } } } },
@@ -409,6 +428,28 @@ export class TradeService {
           await tx.tradeException.update({
             where: { id: asset.tradeExceptionId },
             data: { teamId: asset.toTeamId },
+          });
+        }
+
+        if (asset.kind === TradeAssetKind.draftPick && asset.draftPickId) {
+          // Only `currentTeamId` moves. `originalTeamId` never does: every
+          // protection and the back-to-back rule are read against the team
+          // the pick was born to.
+          await tx.draftPick.update({
+            where: { id: asset.draftPickId },
+            data: { currentTeamId: asset.toTeamId },
+          });
+
+          // Rule 12.10 — both teams' pick pages show the terms and the
+          // current status, which means the trail has to be kept.
+          await tx.draftPickEvent.create({
+            data: {
+              pickId: asset.draftPickId,
+              fromTeamId: asset.fromTeamId,
+              toTeamId: asset.toTeamId,
+              tradeId: trade.id,
+              reason: `Trade #${trade.id}`,
+            },
           });
         }
       }
@@ -518,8 +559,15 @@ export class TradeService {
       toTeamId: number;
       leaguePlayerId: number | null;
       tradeExceptionId: number | null;
+      draftPickId: number | null;
       salary: number;
     }[] = [];
+
+    // Loaded once, and only if a pick is actually in the deal: the
+    // back-to-back rule is a question about the original team's *other*
+    // drafts, so it cannot be answered from the one pick being moved.
+    let pickContext: Awaited<ReturnType<typeof this.pickTradingState>> | null =
+      null;
 
     for (const asset of payload.assets) {
       if (asset.fromTeamId === asset.toTeamId) {
@@ -570,7 +618,57 @@ export class TradeService {
           toTeamId: asset.toTeamId,
           leaguePlayerId: row.id,
           tradeExceptionId: null,
+          draftPickId: null,
           salary: row.contracts[0]?.years[0]?.capHit ?? 0,
+        });
+        continue;
+      }
+
+      if (asset.kind === TradeAssetKind.draftPick) {
+        if (!asset.draftPickId) {
+          throw new AppError(
+            HttpStatus.BAD_REQUEST,
+            'A draft pick asset needs a pick.',
+          );
+        }
+
+        pickContext ??= await this.pickTradingState(leagueId, seasonStartYear);
+
+        const pick = pickContext.picks.find(
+          (row) => row.id === asset.draftPickId,
+        );
+        if (!pick || pick.currentTeamId !== asset.fromTeamId) {
+          throw new AppError(
+            HttpStatus.BAD_REQUEST,
+            'That draft pick does not belong to the team sending it.',
+          );
+        }
+
+        // Rule 12.11 — frozen, outside the window, owed under a protection or
+        // breaking the back-to-back rule. The message the owner already sees
+        // on the Draft Picks page is the one they get back here.
+        const reason = untradeableReason(pick, pickContext.picks, {
+          currentSeasonStartYear: seasonStartYear,
+          windowDrafts: pickContext.windowDrafts,
+          allowDraftPickTrading: pickContext.allowDraftPickTrading,
+        });
+        if (reason) {
+          throw new AppError(
+            HttpStatus.BAD_REQUEST,
+            `${draftYearLabel(pick.seasonStartYear)} ${roundLabel(pick.round)}: ${UNTRADEABLE_MESSAGE[reason]}`,
+          );
+        }
+
+        resolved.push({
+          kind: TradeAssetKind.draftPick,
+          fromTeamId: asset.fromTeamId,
+          toTeamId: asset.toTeamId,
+          leaguePlayerId: null,
+          tradeExceptionId: null,
+          draftPickId: pick.id,
+          // A pick carries no salary into the matching sum. It is an asset,
+          // not money owed — the same reason an exception carries none.
+          salary: 0,
         });
         continue;
       }
@@ -609,6 +707,7 @@ export class TradeService {
         toTeamId: asset.toTeamId,
         leaguePlayerId: null,
         tradeExceptionId: exception.id,
+        draftPickId: null,
         // An exception carries no salary into the matching sum: it is room,
         // not money owed.
         salary: 0,
@@ -868,7 +967,58 @@ export class TradeService {
             }
           : null,
         exception: asset.tradeException,
+        pick: asset.draftPick
+          ? {
+              id: asset.draftPick.id,
+              seasonStartYear: asset.draftPick.seasonStartYear,
+              round: asset.draftPick.round,
+              label: `${draftYearLabel(asset.draftPick.seasonStartYear)} ${roundLabel(asset.draftPick.round)}`,
+              protectedTopN: asset.draftPick.protectedTopN,
+              originalTeam: asset.draftPick.originalTeam,
+            }
+          : null,
       })),
+    };
+  }
+
+  /**
+   * Everything Rule 12.11 needs to judge a pick, read once per proposal.
+   *
+   * Every pick in the league, not just the ones in the deal: the back-to-back
+   * rule (Rule 12.2) asks whether the original team has already given away a
+   * first-rounder in the draft either side of this one.
+   */
+  private async pickTradingState(leagueId: number, seasonStartYear: number) {
+    const [settings, picks] = await Promise.all([
+      this.prisma.leagueSettings.findUnique({
+        where: { leagueId },
+        select: {
+          allowDraftPickTrading: true,
+          pickTradingWindowDrafts: true,
+        },
+      }),
+      this.prisma.draftPick.findMany({
+        where: { leagueId },
+        select: {
+          id: true,
+          seasonStartYear: true,
+          round: true,
+          originalTeamId: true,
+          currentTeamId: true,
+          protectedTopN: true,
+          protectionOutcome: true,
+          protectionFinalYear: true,
+          frozenInSeason: true,
+          usedAt: true,
+        },
+      }),
+    ]);
+
+    return {
+      seasonStartYear,
+      picks,
+      allowDraftPickTrading: settings?.allowDraftPickTrading ?? true,
+      windowDrafts: settings?.pickTradingWindowDrafts ?? DEFAULT_PICK_WINDOW,
     };
   }
 }

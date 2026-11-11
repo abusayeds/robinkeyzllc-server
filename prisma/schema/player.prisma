@@ -29,9 +29,10 @@ model NbaTeam {
   updatedAt DateTime  @updatedAt
   syncedAt  DateTime?
 
-  players   Player[]
-  gamesHome NbaGame[] @relation("nbaGamesHome")
-  gamesAway NbaGame[] @relation("nbaGamesVisitor")
+  players     Player[]
+  gamesHome   NbaGame[]        @relation("nbaGamesHome")
+  gamesAway   NbaGame[]        @relation("nbaGamesVisitor")
+  playerStats PlayerGameStat[]
 }
 
 model Player {
@@ -52,8 +53,14 @@ model Player {
 
   position String?
   height   String?
-  college  String?
-  country  String?
+
+  // Pounds, as text, for the same reason height is: balldontlie sends "215"
+  // and the card shows it. Nothing calculates on it, and a number column
+  // would invite someone to.
+  weight String?
+
+  college String?
+  country String?
 
   draftYear   Int?
   draftRound  Int?
@@ -84,9 +91,11 @@ model Player {
   aliases       PlayerAlias[]
   leaguePlayers LeaguePlayer[]
   deadMoney     DeadMoney[]
+  waivers       Waiver[]
   importRows    ImportRow[]
   draftSlots    DraftOrderSlot[]
   gameStats     PlayerGameStat[]
+  injury        PlayerInjury?
 
   @@index([nameNormalized])
   // Declared here, not only in SQL: without it Prisma treats the trigram index

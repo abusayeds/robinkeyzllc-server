@@ -1,5 +1,7 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsEnum,
   IsInt,
   IsISO8601,
@@ -42,6 +44,21 @@ export class SubmitOfferDto {
   @IsOptional()
   @IsEnum(SignedVia)
   signedVia?: SignedVia;
+
+  /**
+   * Rule 10.1 — what each season is guaranteed for, in season order.
+   *
+   * Only read for a partially guaranteed offer. The length has to match
+   * `years` and each figure has to fit inside that season's salary; both are
+   * checked in the service, where the salaries are known.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(5)
+  @Type(() => Number)
+  @IsInt({ each: true })
+  @Min(0, { each: true })
+  guaranteedAmounts?: number[];
 
   @IsOptional()
   @IsISO8601()

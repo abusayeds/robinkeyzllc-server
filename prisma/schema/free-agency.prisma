@@ -19,6 +19,13 @@ model FreeAgencyOffer {
   contractType ContractType @default(standard)
   signedVia    SignedVia    @default(capSpace)
 
+  // Rule 10.1 — a partially guaranteed offer, one figure per season in the
+  // same order `offerSeasons` produces them. Empty for every other contract
+  // type, where the type alone decides the guarantee. Per season rather than
+  // one figure for the deal because `ContractYear` stores it per season and
+  // no rule says how a single total would be divided across years.
+  guaranteedAmounts Int[]
+
   status FreeAgencyOfferStatus @default(pending)
 
   // Each rule, with whether it passed, worked out when the offer is made and

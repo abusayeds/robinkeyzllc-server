@@ -13,11 +13,14 @@ import {
 } from '@nestjs/common';
 import { TeamRole } from '@prisma/client';
 import type { Response } from 'express';
+import { CurrentLeague } from '../../common/decorators/current-league.decorator';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { LeagueAuth } from '../../common/decorators/league-auth.decorator';
 import { leagueRole } from '../../utils/role';
 import { sendResponse } from '../../utils/sendResponse';
 import { AssignTeamMemberDto } from './dto/assign-member.dto';
 import { CreateTeamDto } from './dto/create-team.dto';
+import { SetTeamIntelDto } from './dto/set-team-intel.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { TeamService } from './team.service';
 
@@ -158,6 +161,38 @@ export class TeamController {
       statusCode: HttpStatus.OK,
       success: true,
       message: 'Team co-owner assigned successfully',
+      data,
+    });
+  }
+
+  // Every member may call it; the service refuses anybody who does not hold
+  // this team. A commissioner may set it on a team's behalf, which is what
+  // 'canManageAnyTeam' says.
+  @Patch(':teamId/intel')
+  @LeagueAuth()
+  async setIntel(
+    @Res() res: Response,
+    @Param('leagueId', ParseIntPipe) leagueId: number,
+    @Param('teamId', ParseIntPipe) teamId: number,
+    @Body() body: SetTeamIntelDto,
+    @CurrentUser('id') userId: number,
+    @CurrentLeague('canManageAnyTeam') canManageAnyTeam: boolean,
+  ) {
+    const data = await this.teamService.setIntel(
+      leagueId,
+      teamId,
+      body.status ?? null,
+      userId,
+      canManageAnyTeam === true,
+    );
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message:
+        body.status === undefined || body.status === null
+          ? 'League intel cleared successfully'
+          : 'League intel updated successfully',
       data,
     });
   }

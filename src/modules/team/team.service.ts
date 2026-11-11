@@ -1,5 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { Prisma, TeamRole, Conference } from '@prisma/client';
+import { Prisma, TeamRole, Conference, TeamIntelStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppError } from '../../common/errors/appError';
 import { NotificationService } from '../notification/notification.service';
@@ -308,7 +308,50 @@ export class TeamService {
       logo: team.logo,
       owner: holder(TeamRole.owner),
       coOwner: holder(TeamRole.coOwner),
+      intelStatus: team.intelStatus,
       createdAt: team.createdAt,
     };
+  }
+
+  /**
+   * League Intel — what this team says it is doing.
+   *
+   * Set by the team's own owner or co-owner, and by a commissioner on their
+   * behalf. Not by any other member: the whole value of the field is that it
+   * is self-reported, and intel somebody else wrote about you would be a
+   * different feature with a different name.
+   *
+   * `null` clears it, which is the "clear intel" option on the dropdown, and
+   * is why the column is nullable rather than defaulted.
+   */
+  async setIntel(
+    leagueId: number,
+    teamId: number,
+    status: TeamIntelStatus | null,
+    userId: number,
+    canManageAnyTeam: boolean,
+  ): Promise<TTeam> {
+    await this.findTeam(leagueId, teamId);
+
+    if (!canManageAnyTeam) {
+      const membership = await this.prisma.teamMember.findFirst({
+        where: { leagueId, teamId, userId },
+        select: { id: true },
+      });
+      if (!membership) {
+        throw new AppError(
+          HttpStatus.FORBIDDEN,
+          'Only this team can set its own league intel.',
+        );
+      }
+    }
+
+    const team = await this.prisma.team.update({
+      where: { id: teamId },
+      data: { intelStatus: status },
+      include: { members: HOLDER_SELECT },
+    });
+
+    return this.toTeam(team);
   }
 }

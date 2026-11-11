@@ -23,10 +23,16 @@ model LeagueDraft {
   reversalRound Int         @default(2)
 
   startsAt DateTime?
+
+  // When the room actually opened, which is not the same as `startsAt`: that
+  // is the time the commissioner advertised, and a draft can start late. The
+  // first pick clock runs from here, and every clock after it runs from the
+  // previous pick, so this is the only anchor the countdown needs.
+  startedAt DateTime?
   // The time zone the start time was entered in, e.g. "America/New_York".
   // Stored as given, because the clock is read by people in several places and
   // the label is part of what the commissioner set.
-  timezone String?
+  timezone  String?
 
   pickSeconds Int @default(120)
 

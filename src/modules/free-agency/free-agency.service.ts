@@ -34,6 +34,7 @@ const OFFER_SELECT = {
   raisePct: true,
   contractType: true,
   signedVia: true,
+  guaranteedAmounts: true,
   status: true,
   checks: true,
   expiresAt: true,
@@ -58,6 +59,98 @@ const OFFER_SELECT = {
 type OfferRow = Prisma.FreeAgencyOfferGetPayload<{
   select: typeof OFFER_SELECT;
 }>;
+
+const money = (value: number) => `${Math.round(value).toLocaleString('en-US')}`;
+
+/**
+ * What a signed season is guaranteed for.
+ *
+ * Rule 10.1 lets a contract be non-guaranteed, and Rule 10.14 reads exactly
+ * this field to work out what releasing the player costs. Writing `full` for
+ * every signing — which is what happened before — made a non-guaranteed deal
+ * cost its whole remaining value to walk away from.
+ */
+function guaranteeFor(contractType: ContractType): GuaranteeType {
+  return contractType === ContractType.nonGuaranteed
+    ? GuaranteeType.none
+    : GuaranteeType.full;
+}
+
+/**
+ * What one signed season is guaranteed for.
+ *
+ * A partial guarantee names a figure per season, so the year carries both the
+ * type and the amount; everything else is decided by the contract type alone
+ * and stores no amount. A season of a partial deal guaranteed for its whole
+ * salary is written as `full`, and one guaranteed for nothing as `none`:
+ * `owedFor` in the waive service reads the type first, and a `partial` year
+ * carrying its own salary would be the same obligation described two ways.
+ */
+function guaranteeForSeason(
+  offer: { contractType: ContractType; guaranteedAmounts: number[] },
+  index: number,
+): { guaranteeType: GuaranteeType; guaranteedAmount: number | null } {
+  if (offer.contractType !== ContractType.partiallyGuaranteed) {
+    return {
+      guaranteeType: guaranteeFor(offer.contractType),
+      guaranteedAmount: null,
+    };
+  }
+
+  const amount = offer.guaranteedAmounts[index] ?? 0;
+  if (amount <= 0) {
+    return { guaranteeType: GuaranteeType.none, guaranteedAmount: null };
+  }
+
+  return {
+    guaranteeType: GuaranteeType.partial,
+    guaranteedAmount: amount,
+  };
+}
+
+/**
+ * Checks a partial guarantee against the salaries it is attached to.
+ *
+ * Returns an empty list for every other contract type, so the column says
+ * "nothing was named" rather than repeating what the type already decides.
+ */
+function partialGuarantees(
+  terms: OfferTerms,
+  input: number[] | undefined,
+  startSeasonStartYear: number,
+): number[] {
+  if (terms.contractType !== ContractType.partiallyGuaranteed) return [];
+
+  if (!input || input.length !== terms.years) {
+    throw new AppError(
+      HttpStatus.BAD_REQUEST,
+      `A partially guaranteed offer needs one guaranteed amount per season — ${terms.years} of them.`,
+    );
+  }
+
+  const seasons = offerSeasons(terms, startSeasonStartYear);
+
+  for (const [index, amount] of input.entries()) {
+    const season = seasons[index];
+    if (amount > season.salary) {
+      throw new AppError(
+        HttpStatus.BAD_REQUEST,
+        `The ${season.seasonStartYear} guarantee of ${money(amount)} is more than that season's salary of ${money(season.salary)}.`,
+      );
+    }
+  }
+
+  // Guaranteeing every season in full is a standard contract wearing another
+  // name, and the two would then behave identically on a release.
+  if (input.every((amount, index) => amount === seasons[index].salary)) {
+    throw new AppError(
+      HttpStatus.BAD_REQUEST,
+      'Every season is guaranteed in full, which is a standard contract. Offer it as standard instead.',
+    );
+  }
+
+  return input;
+}
 
 @Injectable()
 export class FreeAgencyService {
@@ -132,6 +225,14 @@ export class FreeAgencyService {
       signedVia: payload.signedVia ?? SignedVia.capSpace,
     };
 
+    // Rule 10.1 — a partial guarantee is named season by season, and Rule
+    // 10.14 pays out exactly what is named here when the player is released.
+    const guaranteedAmounts = partialGuarantees(
+      terms,
+      payload.guaranteedAmounts,
+      league.seasonStartYear,
+    );
+
     const context = await this.contextFor(leagueId, teamId, league);
     const checks = checkOffer(terms, {
       ...context,
@@ -152,6 +253,7 @@ export class FreeAgencyService {
         raisePct: terms.raisePct,
         contractType: terms.contractType,
         signedVia: terms.signedVia,
+        guaranteedAmounts,
         checks: checks as unknown as Prisma.InputJsonValue,
         expiresAt: payload.expiresAt ? new Date(payload.expiresAt) : null,
       },
@@ -162,6 +264,9 @@ export class FreeAgencyService {
         raisePct: terms.raisePct,
         contractType: terms.contractType,
         signedVia: terms.signedVia,
+        // Replaced outright rather than merged: a re-bid over fewer years
+        // would otherwise keep guarantees for seasons that no longer exist.
+        guaranteedAmounts: { set: guaranteedAmounts },
         // Raising a bid revives a withdrawn offer rather than leaving a dead
         // row beside a live one.
         status: FreeAgencyOfferStatus.pending,
@@ -261,11 +366,11 @@ export class FreeAgencyService {
           startSeasonStartYear: seasons[0].seasonStartYear,
           endSeasonStartYear: seasons[seasons.length - 1].seasonStartYear,
           years: {
-            create: seasons.map((season) => ({
+            create: seasons.map((season, index) => ({
               seasonStartYear: season.seasonStartYear,
               salary: isTwoWay ? 0 : season.salary,
               capHit: isTwoWay ? 0 : season.salary,
-              guaranteeType: GuaranteeType.full,
+              ...guaranteeForSeason(offer, index),
             })),
           },
         },
@@ -368,6 +473,7 @@ export class FreeAgencyService {
             raisePct: true,
             contractType: true,
             signedVia: true,
+            guaranteedAmounts: true,
             expiresAt: true,
             createdAt: true,
             team: { select: { id: true, name: true, abbr: true, color: true } },
@@ -416,6 +522,9 @@ export class FreeAgencyService {
             raisePct: offer.raisePct,
             contractType: offer.contractType,
             signedVia: offer.signedVia,
+            // The offer sheet reopens on an existing bid, so a partial
+            // guarantee has to come back the way it was entered.
+            guaranteedAmounts: offer.guaranteedAmounts,
             totalValue: offerTotalValue({
               years: offer.years,
               firstYearSalary: offer.firstYearSalary,
@@ -635,6 +744,9 @@ export class FreeAgencyService {
         yearIndex: index,
         salary: season.salary,
       })),
+      // Empty unless the offer is partially guaranteed, so the modal can show
+      // back exactly what was named rather than guessing at it.
+      guaranteedAmounts: row.guaranteedAmounts,
       checks,
       isLegal: offerIsLegal(checks),
       expiresAt: row.expiresAt,

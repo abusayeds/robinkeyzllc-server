@@ -17,11 +17,15 @@ import { sendResponse } from '../../utils/sendResponse';
 import { ListTradesDto } from './dto/list-trades.dto';
 import { ProposeTradeDto } from './dto/propose-trade.dto';
 import { RejectTradeDto } from './dto/reject-trade.dto';
+import { TradeFinderService } from './trade.finder.service';
 import { TradeService } from './trade.service';
 
 @Controller('leagues/:leagueId/trades')
 export class TradeController {
-  constructor(private readonly tradeService: TradeService) {}
+  constructor(
+    private readonly tradeService: TradeService,
+    private readonly tradeFinderService: TradeFinderService,
+  ) {}
 
   // Trades are league business: everyone can see what has been proposed, and
   // the trade finder depends on it.
@@ -42,6 +46,29 @@ export class TradeController {
       statusCode: HttpStatus.OK,
       success: true,
       message: 'Trades retrieved successfully',
+      data,
+    });
+  }
+
+  /**
+   * Every tradeable player in the league, with last season's averages.
+   *
+   * The caller's own team is resolved on the server, so the board can mark
+   * which rows are already theirs without being told who they are.
+   */
+  @Get('finder')
+  @LeagueAuth()
+  async finder(
+    @Res() res: Response,
+    @Param('leagueId', ParseIntPipe) leagueId: number,
+    @CurrentUser('id') userId: number,
+  ) {
+    const data = await this.tradeFinderService.listing(leagueId, userId);
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'Trade finder listing retrieved successfully',
       data,
     });
   }

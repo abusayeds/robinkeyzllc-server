@@ -228,6 +228,8 @@ enum SyncJob {
   games
   // Per-player lines, from /v1/box_scores by date.
   stats
+  // Current injuries, from /v1/player_injuries.
+  injuries
 }
 
 enum SyncStatus {
@@ -261,6 +263,19 @@ enum TradeAssetKind {
 
 // A league's two halves. Fantasy conferences, not the NBA's: a team is put
 // in one when it is created and the commissioner can move it.
+// League Intel — what a team says it is doing this season.
+//
+// Self-reported: it is set by that team's own owner and read-only to everybody
+// else, which is the whole point. Nothing in the rule book enforces it and
+// nothing in the cap engine reads it; it exists so the other eleven owners
+// know who is worth calling about a trade.
+enum TeamIntelStatus {
+  contending
+  rebuilding
+  buying
+  selling
+}
+
 enum Conference {
   east
   west

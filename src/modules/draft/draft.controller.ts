@@ -13,15 +13,18 @@ import {
 } from '@nestjs/common';
 import { DraftKind } from '@prisma/client';
 import type { Response } from 'express';
+import { CurrentLeague } from '../../common/decorators/current-league.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { LeagueAuth } from '../../common/decorators/league-auth.decorator';
 import { AppError } from '../../common/errors/appError';
 import { leagueRole } from '../../utils/role';
 import { sendResponse } from '../../utils/sendResponse';
+import { DraftLiveService } from './draft.live.service';
 import { DraftPicksService } from './draft.picks.service';
 import { DraftService } from './draft.service';
 import { GeneratePicksDto } from './dto/generate-picks.dto';
 import { ListPoolDto } from './dto/list-pool.dto';
+import { MakePickDto } from './dto/make-pick.dto';
 import { ReassignPickDto } from './dto/reassign-pick.dto';
 import { SetDraftOrderDto } from './dto/set-draft-order.dto';
 import { SetPickProtectionDto } from './dto/set-pick-protection.dto';
@@ -47,6 +50,7 @@ export class DraftController {
   constructor(
     private readonly draftService: DraftService,
     private readonly picksService: DraftPicksService,
+    private readonly liveService: DraftLiveService,
   ) {}
 
   // ---------------------------------------------------------------- picks
@@ -225,6 +229,78 @@ export class DraftController {
       statusCode: HttpStatus.OK,
       success: true,
       message: 'Draft pool retrieved successfully',
+      data,
+    });
+  }
+
+  // ------------------------------------------------------------ the room
+
+  // Declared before 'drafts/:kind/board' is reachable by anything else: these
+  // are all static words after ':kind', so order between them does not matter.
+  @Get('drafts/:kind/board')
+  @LeagueAuth()
+  async board(
+    @Res() res: Response,
+    @Param('leagueId', ParseIntPipe) leagueId: number,
+    @Param('kind') kind: string,
+    @CurrentUser('id') userId: number,
+  ) {
+    const data = await this.liveService.board(
+      leagueId,
+      parseKind(kind),
+      userId,
+    );
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'Draft board retrieved successfully',
+      data,
+    });
+  }
+
+  @Post('drafts/:kind/start')
+  @LeagueAuth(...MANAGERS)
+  async startDraft(
+    @Res() res: Response,
+    @Param('leagueId', ParseIntPipe) leagueId: number,
+    @Param('kind') kind: string,
+  ) {
+    const data = await this.liveService.start(leagueId, parseKind(kind));
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'Draft started successfully',
+      data,
+    });
+  }
+
+  // Every member may call it; the service refuses anybody who is not the team
+  // on the clock. A commissioner may pick on a team's behalf, which is what
+  // 'canManageAnyTeam' says.
+  @Post('drafts/:kind/pick')
+  @LeagueAuth()
+  async makePick(
+    @Res() res: Response,
+    @Param('leagueId', ParseIntPipe) leagueId: number,
+    @Param('kind') kind: string,
+    @Body() body: MakePickDto,
+    @CurrentUser('id') userId: number,
+    @CurrentLeague('canManageAnyTeam') canManageAnyTeam: boolean,
+  ) {
+    const data = await this.liveService.pick(
+      leagueId,
+      parseKind(kind),
+      body.playerId,
+      userId,
+      canManageAnyTeam === true,
+    );
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'Pick made successfully',
       data,
     });
   }

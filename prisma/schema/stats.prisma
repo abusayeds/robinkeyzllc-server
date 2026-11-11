@@ -57,6 +57,17 @@ model PlayerGameStat {
   playerId Int
   gameId   Int
 
+  // The side he appeared on, which the box score knows and the game row does
+  // not: a game has a home and a visitor, but only the line says which one he
+  // played for. Without it there is no opponent to print in a game log and no
+  // team column in a career table.
+  //
+  // Nullable because the rows pulled before this column existed cannot have
+  // it. Re-running a date fills it in; until then the reader shows a dash
+  // rather than guessing from his current team, which is wrong for every
+  // season he has been traded in.
+  nbaTeamId Int?
+
   // Carried on the row although the game holds them too, because every query
   // here is "this player, between these two dates" and that should not need a
   // join to answer.
@@ -87,8 +98,9 @@ model PlayerGameStat {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  player Player  @relation(fields: [playerId], references: [id], onDelete: Cascade)
-  game   NbaGame @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  player  Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  game    NbaGame  @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  nbaTeam NbaTeam? @relation(fields: [nbaTeamId], references: [id], onDelete: SetNull)
 
   // A player has one line per game. Re-running a date corrects the row rather
   // than adding a second one, which is what makes the nightly job safe to
@@ -96,4 +108,6 @@ model PlayerGameStat {
   @@unique([playerId, gameId])
   @@index([playerId, gameDate])
   @@index([gameDate])
+  // Career totals are asked for one player at a time, season by season.
+  @@index([playerId, season])
 }

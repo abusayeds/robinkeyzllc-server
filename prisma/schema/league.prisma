@@ -24,6 +24,7 @@ model League {
   leaguePlayers   LeaguePlayer[]
   contracts       Contract[]
   deadMoney       DeadMoney[]
+  waivers         Waiver[]
   capHolds        CapHold[]
   importBatches   ImportBatch[]
   faOffers        FreeAgencyOffer[]

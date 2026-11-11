@@ -169,6 +169,67 @@ export class LeagueService {
     };
   }
 
+  /**
+   * Every league on the platform, for the Super Admin.
+   *
+   * Soft-deleted leagues are included rather than hidden: an administrator
+   * looking for a league that has disappeared needs to find it, and the
+   * status says what happened to it.
+   */
+  async allLeagues() {
+    const leagues = await this.prisma.league.findMany({
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        name: true,
+        logo: true,
+        season: true,
+        teamCount: true,
+        visibility: true,
+        isDeleted: true,
+        createdAt: true,
+        createdBy: { select: { id: true, name: true, email: true } },
+        settings: { select: { setupLocked: true, setupMode: true } },
+        _count: { select: { teams: true, members: true, leaguePlayers: true } },
+      },
+    });
+
+    // The commissioner is a role on LeagueMember, not a column on League,
+    // so it is looked up once for all of them rather than per row.
+    const commissioners = await this.prisma.leagueMember.findMany({
+      where: { role: LeagueRole.commissioner },
+      select: {
+        leagueId: true,
+        user: { select: { id: true, name: true, email: true } },
+      },
+    });
+    const byLeagueId = new Map(
+      commissioners.map((row) => [row.leagueId, row.user]),
+    );
+
+    return leagues.map((league) => ({
+      id: league.id,
+      name: league.name,
+      logo: league.logo,
+      season: league.season,
+      visibility: league.visibility,
+      teamCount: league.teamCount,
+      teams: league._count.teams,
+      members: league._count.members,
+      players: league._count.leaguePlayers,
+      // Falls back to whoever created it: a league always has a creator,
+      // and the commissioner row can be missing if membership was edited.
+      commissioner: byLeagueId.get(league.id) ?? league.createdBy,
+      // AVORA has no status column. A league is being set up until players
+      // have been brought in, which is exactly what setupLocked marks.
+      status: league.isDeleted
+        ? 'Archived'
+        : league.settings?.setupLocked
+          ? 'Active'
+          : 'Draft',
+      createdAt: league.createdAt,
+    }));
+  }
   async getSettings(leagueId: number) {
     // Leagues created before the settings table existed have no row, so one
     // is written on first read rather than failing.

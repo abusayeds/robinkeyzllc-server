@@ -53,6 +53,9 @@ export class NbaNightlyService {
 
     try {
       await this.syncRecentNights();
+      // Before settling: an injury does not affect a result, but the
+      // board should be current by the time anyone reads the news.
+      await this.syncService.syncInjuries();
       await this.settleFinishedWeeks();
     } catch (error) {
       const message =

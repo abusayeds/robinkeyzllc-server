@@ -27,6 +27,8 @@ import { DraftModule } from './modules/draft/draft.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { ScoringModule } from './modules/scoring/scoring.module';
 import { TransactionsModule } from './modules/transactions/transactions.module';
+import { PlatformModule } from './modules/platform/platform.module';
+import { NewsModule } from './modules/news/news.module';
 
 @Module({
   imports: [
@@ -60,6 +62,8 @@ import { TransactionsModule } from './modules/transactions/transactions.module';
     DashboardModule,
     ScoringModule,
     TransactionsModule,
+    PlatformModule,
+    NewsModule,
   ],
   controllers: [AppController],
 })

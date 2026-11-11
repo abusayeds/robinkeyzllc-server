@@ -97,6 +97,13 @@ export type BdlBoxScore = {
   visitor_team: BdlTeam & { players: BdlStatLine[] };
 };
 
+export type BdlInjury = {
+  player: { id: number };
+  return_date: string | null;
+  description: string | null;
+  status: string;
+};
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 @Injectable()
@@ -223,5 +230,10 @@ export class BalldontlieClient {
   async boxScores(date: string): Promise<BdlBoxScore[]> {
     const page = await this.get<BdlBoxScore>('/v1/box_scores', { date });
     return page.data ?? [];
+  }
+
+  /** Every player currently carrying an injury. Cursor paginated. */
+  playerInjuries() {
+    return this.paginate<BdlInjury>('/v1/player_injuries');
   }
 }

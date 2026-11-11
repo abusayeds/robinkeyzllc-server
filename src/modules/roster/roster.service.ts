@@ -23,7 +23,11 @@ const ROSTER_SELECT = {
       position: true,
       yearsOfService: true,
       yearsOfServiceEstimated: true,
+      headshot: true,
       nbaTeam: { select: { abbreviation: true } },
+      // One row per player, replaced by each nightly sync, so it is current
+      // or absent — and absent means healthy.
+      injury: { select: { status: true, returnDate: true } },
     },
   },
   contracts: {
@@ -209,6 +213,7 @@ export class RosterService {
         abbr: true,
         color: true,
         logo: true,
+        intelStatus: true,
         members: {
           select: {
             role: true,
@@ -440,6 +445,8 @@ export class RosterService {
       nbaTeam: row.player.nbaTeam?.abbreviation ?? null,
       experience: row.player.yearsOfService,
       experienceIsEstimated: row.player.yearsOfServiceEstimated,
+      headshot: row.player.headshot,
+      injury: row.player.injury,
       birdYears: row.birdYears,
       status: row.status,
       slotType: row.slotType,

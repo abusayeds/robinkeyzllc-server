@@ -14,7 +14,12 @@ model Team {
   // Optional. When a league has no divisions the standings table's Div
   // column falls back to the team's record inside its conference, which is
   // the only other grouping there is.
-  division  String?
+  division String?
+
+  // League Intel. Null means the owner has not said, or has cleared it, and
+  // that is a real answer rather than a missing one — so nothing defaults it.
+  intelStatus TeamIntelStatus?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -23,6 +28,7 @@ model Team {
   leaguePlayers   LeaguePlayer[]
   contracts       Contract[]
   deadMoney       DeadMoney[]
+  waivers         Waiver[]
   capHolds        CapHold[]
   importRows      ImportRow[]
   faOffers        FreeAgencyOffer[]

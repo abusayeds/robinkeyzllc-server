@@ -63,6 +63,7 @@ export class NbaSyncService {
             nameNormalized: normalizePlayerName(name),
             position: player.position?.trim() || null,
             height: player.height?.trim() || null,
+            weight: player.weight?.trim() || null,
             college: player.college?.trim() || null,
             country: player.country?.trim() || null,
             draftYear: player.draft_year ?? null,
@@ -190,55 +191,61 @@ export class NbaSyncService {
           { created: 0, updated: 0, skipped: 0, cursor: null },
         );
 
-        const lines = [
-          ...(game.home_team?.players ?? []),
-          ...(game.visitor_team?.players ?? []),
+        // Flattening both sides into one list would throw away the only
+        // thing that says which team a player appeared for, so each side is
+        // walked with its own team id.
+        const sides = [
+          { nbaTeamId: home, lines: game.home_team?.players ?? [] },
+          { nbaTeamId: visitor, lines: game.visitor_team?.players ?? [] },
         ];
 
-        for (const line of lines) {
-          const playerId = playerIds.get(line.player?.id ?? -1);
-          if (!playerId) {
-            record.skipped += 1;
-            continue;
-          }
+        for (const { nbaTeamId, lines } of sides) {
+          for (const line of lines) {
+            const playerId = playerIds.get(line.player?.id ?? -1);
+            if (!playerId) {
+              record.skipped += 1;
+              continue;
+            }
 
-          const data = {
-            gameDate: dateOnly(game.date),
-            season: game.season,
-            minutes: line.min?.trim() || null,
-            fgm: line.fgm ?? 0,
-            fga: line.fga ?? 0,
-            ftm: line.ftm ?? 0,
-            fta: line.fta ?? 0,
-            fg3m: line.fg3m ?? 0,
-            fg3a: line.fg3a ?? 0,
-            pts: line.pts ?? 0,
-            reb: line.reb ?? 0,
-            oreb: line.oreb ?? 0,
-            dreb: line.dreb ?? 0,
-            ast: line.ast ?? 0,
-            stl: line.stl ?? 0,
-            blk: line.blk ?? 0,
-            turnover: line.turnover ?? 0,
-            pf: line.pf ?? 0,
-          };
+            const data = {
+              nbaTeamId,
+              gameDate: dateOnly(game.date),
+              season: game.season,
+              minutes: line.min?.trim() || null,
+              fgm: line.fgm ?? 0,
+              fga: line.fga ?? 0,
+              ftm: line.ftm ?? 0,
+              fta: line.fta ?? 0,
+              fg3m: line.fg3m ?? 0,
+              fg3a: line.fg3a ?? 0,
+              pts: line.pts ?? 0,
+              reb: line.reb ?? 0,
+              oreb: line.oreb ?? 0,
+              dreb: line.dreb ?? 0,
+              ast: line.ast ?? 0,
+              stl: line.stl ?? 0,
+              blk: line.blk ?? 0,
+              turnover: line.turnover ?? 0,
+              pf: line.pf ?? 0,
+            };
 
-          const existing = await this.prisma.playerGameStat.findUnique({
-            where: { playerId_gameId: { playerId, gameId: gameRow.id } },
-            select: { id: true },
-          });
-
-          if (existing) {
-            await this.prisma.playerGameStat.update({
-              where: { id: existing.id },
-              data,
+            const existing = await this.prisma.playerGameStat.findUnique({
+              where: { playerId_gameId: { playerId, gameId: gameRow.id } },
+              select: { id: true },
             });
-            record.updated += 1;
-          } else {
-            await this.prisma.playerGameStat.create({
-              data: { ...data, playerId, gameId: gameRow.id },
-            });
-            record.created += 1;
+
+            if (existing) {
+              await this.prisma.playerGameStat.update({
+                where: { id: existing.id },
+                data,
+              });
+              record.updated += 1;
+            } else {
+              await this.prisma.playerGameStat.create({
+                data: { ...data, playerId, gameId: gameRow.id },
+              });
+              record.created += 1;
+            }
           }
         }
       }
@@ -352,6 +359,95 @@ export class NbaSyncService {
       linesSkipped: skipped,
       failedNights: failed,
     };
+  }
+  /**
+   * Who is hurt right now.
+   *
+   * The feed is the whole truth each time it is read, so a player it stops
+   * returning is healthy again — which is why this deletes the rows it did
+   * not see rather than leaving yesterday's injuries on the board forever.
+   */
+  async syncInjuries() {
+    return this.run(SyncJob.injuries, async (record) => {
+      const rows: {
+        bdlPlayerId: number;
+        status: string;
+        description: string | null;
+        returnDate: Date | null;
+      }[] = [];
+
+      for await (const { rows: page, cursor } of this.bdl.playerInjuries()) {
+        for (const injury of page) {
+          if (!injury.player?.id || !injury.status?.trim()) {
+            record.skipped += 1;
+            continue;
+          }
+          rows.push({
+            bdlPlayerId: injury.player.id,
+            status: injury.status.trim(),
+            description: injury.description?.trim() || null,
+            returnDate: injury.return_date
+              ? dateOnly(injury.return_date)
+              : null,
+          });
+        }
+        record.cursor = cursor;
+      }
+
+      const players = await this.prisma.player.findMany({
+        where: { bdlPlayerId: { in: rows.map((row) => row.bdlPlayerId) } },
+        select: { id: true, bdlPlayerId: true },
+      });
+      const playerIds = new Map(
+        players.map((player) => [player.bdlPlayerId as number, player.id]),
+      );
+
+      const seen: number[] = [];
+
+      for (const row of rows) {
+        const playerId = playerIds.get(row.bdlPlayerId);
+        if (!playerId) {
+          // A player this platform has never synced. Run the player sync.
+          record.skipped += 1;
+          continue;
+        }
+
+        const data = {
+          status: row.status,
+          description: row.description,
+          returnDate: row.returnDate,
+          syncedAt: new Date(),
+        };
+
+        const existing = await this.prisma.playerInjury.findUnique({
+          where: { playerId },
+          select: { id: true },
+        });
+
+        if (existing) {
+          await this.prisma.playerInjury.update({
+            where: { id: existing.id },
+            data,
+          });
+          record.updated += 1;
+        } else {
+          await this.prisma.playerInjury.create({
+            data: { ...data, playerId },
+          });
+          record.created += 1;
+        }
+
+        seen.push(playerId);
+      }
+
+      // Only when the feed actually answered. An empty response from a
+      // failing API must not clear the whole board.
+      if (seen.length > 0) {
+        await this.prisma.playerInjury.deleteMany({
+          where: { playerId: { notIn: seen } },
+        });
+      }
+    });
   }
   async history(limit = 20) {
     return this.prisma.syncRun.findMany({

@@ -20,6 +20,13 @@ model LeaguePlayer {
   birdYears Int                @default(0)
   slotType  RosterSlotType     @default(standard)
 
+  // Appendix B item 6 — the commissioner marks who may reach the higher
+  // ceilings. Rule 10.3's supermax (35% of the cap) and Rule 10.8's 30%
+  // rookie-scale extension are separate decisions, so they are separate
+  // flags; neither is ever set by an owner.
+  supermaxEligible    Boolean @default(false)
+  rookieMax30Eligible Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -160,5 +167,42 @@ model CapHold {
   leaguePlayer LeaguePlayer @relation(fields: [leaguePlayerId], references: [id], onDelete: Cascade)
 
   @@unique([leaguePlayerId, seasonStartYear])
+  @@index([leagueId, teamId])
+}
+
+// Rule 10.14 — the release itself, which is not the same thing as the dead
+// money it creates.
+//
+// A player with nothing guaranteed can be waived and owe nothing, and that
+// release still happened: it has to appear in the transaction feed, and
+// `DeadMoney` cannot carry it because there is no money to write a row for.
+// `DeadMoney` answers "what does this team still owe this season"; this answers
+// "who was let go, and when".
+model Waiver {
+  id       Int @id @default(autoincrement())
+  leagueId Int
+  teamId   Int
+  playerId Int
+
+  // The league year he was waived in.
+  seasonStartYear Int
+
+  // The whole obligation across every season it touches. Zero is a real
+  // answer; the per-season split lives in `DeadMoney`.
+  deadMoneyTotal Int     @default(0)
+  isStretched    Boolean @default(false)
+  // Rule 10.15 — how many seasons the money was spread over, and zero when
+  // nothing was owed.
+  seasonsOwed    Int     @default(0)
+
+  createdAt DateTime @default(now())
+
+  league League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Restrict)
+
+  // No unique key, unlike `DeadMoney`: a player waived, re-signed and waived
+  // again is two releases, and both are real events.
+  @@index([leagueId, createdAt])
   @@index([leagueId, teamId])
 }

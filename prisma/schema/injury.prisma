@@ -1,0 +1,32 @@
+// A player's current injury, as balldontlie reports it.
+//
+// Global, like `Player`: an injury belongs to the player, not to a league, so
+// one nightly pull serves every league at once.
+//
+// One row per player, replaced each sync rather than appended to. A history of
+// injuries is not what any screen asks for — "is he out this week" is — and a
+// row that is no longer returned by the feed means he is available again,
+// which is why the sync deletes what it does not see.
+model PlayerInjury {
+  id       Int @id @default(autoincrement())
+  playerId Int @unique
+
+  // balldontlie's own words: "Out", "Day-To-Day", "Game Time Decision".
+  // Kept as text because the feed is not a closed set and inventing an enum
+  // would silently drop a status nobody anticipated.
+  status String
+
+  description String?
+
+  // A calendar date, not an instant: a return date does not move with the
+  // reader's time zone. Null when the feed gives none.
+  returnDate DateTime? @db.Date
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  syncedAt  DateTime @default(now())
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+}

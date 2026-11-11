@@ -1,4 +1,4 @@
-import { TeamRole } from '@prisma/client';
+import { TeamIntelStatus, TeamRole } from '@prisma/client';
 
 export type TTeamHolder = {
   userId: number;
@@ -17,6 +17,8 @@ export type TTeam = {
   logo: string | null;
   owner: TTeamHolder | null;
   coOwner: TTeamHolder | null;
+  /** League Intel, set by this team's own owner. Null means they have not said. */
+  intelStatus: TeamIntelStatus | null;
   createdAt: Date;
 };
 

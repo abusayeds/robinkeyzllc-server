@@ -14,6 +14,7 @@ import {
 import type { Response } from 'express';
 import { sendResponse } from 'src/utils/sendResponse';
 import { Auth } from '../../common/decorators/auth.decorator';
+import { role } from '../../utils/role';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { LeagueAuth } from '../../common/decorators/league-auth.decorator';
 import { leagueRole } from '../../utils/role';
@@ -62,6 +63,19 @@ export class LeagueController {
     });
   }
 
+  // Declared before ':leagueId', or 'all' is read as an id.
+  @Get('all')
+  @Auth(role.superAdmin)
+  async allLeagues(@Res() res: Response) {
+    const data = await this.leagueService.allLeagues();
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'Leagues retrieved successfully',
+      data,
+    });
+  }
   // Everything below is scoped to one league. LeagueGuard reads :leagueId,
   // checks membership, and refuses a role that is not allowed.
   @Get(':leagueId/settings')

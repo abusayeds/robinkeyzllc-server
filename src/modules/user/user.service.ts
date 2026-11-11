@@ -1,6 +1,6 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
-import { Prisma, Role, type User } from '@prisma/client';
+import { Prisma, Role, type User, LeagueRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AppError } from '../../common/errors/appError';
 import { OTP_PURPOSE, OtpService } from '../../common/otp/otp.service';
@@ -39,8 +39,14 @@ export class usersService {
     const existingUser = await this.prisma.user.findUnique({
       where: { email },
     });
-    if (existingUser && (existingUser.isEmailVerified || existingUser.isDeleted)) {
-    throw new AppError(HttpStatus.CONFLICT,'User with this email already exists');
+    if (
+      existingUser &&
+      (existingUser.isEmailVerified || existingUser.isDeleted)
+    ) {
+      throw new AppError(
+        HttpStatus.CONFLICT,
+        'User with this email already exists',
+      );
     }
     const hashedPassword = await bcrypt.hash(password, 10);
 
@@ -193,11 +199,43 @@ export class usersService {
     const args = queryBuilder.build<Prisma.UserFindManyArgs>();
 
     const [data, totalItem] = await Promise.all([
-      this.prisma.user.findMany({ ...args, select: safeUserSelect }),
+      this.prisma.user.findMany({
+        ...args,
+        select: {
+          ...safeUserSelect,
+          // What the admin list shows beside each name: how many leagues
+          // they are in, and which roles they hold across them. A role in
+          // AVORA belongs to a membership, not to the user, so there is no
+          // single role column to read.
+          leagueMemberships: { select: { role: true } },
+          teamMemberships: { select: { id: true }, take: 1 },
+        },
+      }),
       this.prisma.user.count({ where: queryBuilder.getWhere() }),
     ]);
 
-    return { data, pagination: queryBuilder.calculatePagination(totalItem) };
+    const rows = data.map(
+      ({ leagueMemberships, teamMemberships, ...user }) => ({
+        ...user,
+        leagues: leagueMemberships.length,
+        // The strongest role they hold anywhere, which is what a platform-wide
+        // list can honestly say about one person.
+        leagueRole: leagueMemberships.some(
+          (m) => m.role === LeagueRole.commissioner,
+        )
+          ? 'Commissioner'
+          : leagueMemberships.some((m) => m.role === LeagueRole.coCommissioner)
+            ? 'Co-Commissioner'
+            : teamMemberships.length > 0
+              ? 'Owner'
+              : 'Member',
+      }),
+    );
+
+    return {
+      data: rows,
+      pagination: queryBuilder.calculatePagination(totalItem),
+    };
   }
 
   async getSingleUserDB(id: number) {

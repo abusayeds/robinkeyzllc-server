@@ -181,4 +181,18 @@ export class NbaController {
       data,
     });
   }
+
+  /** Who is hurt right now. Replaces the whole board each run. */
+  @Post('injuries')
+  @Auth(role.superAdmin)
+  async injuries(@Res() res: Response) {
+    const data = await this.nbaSyncService.syncInjuries();
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'NBA injuries synced successfully',
+      data,
+    });
+  }
 }

@@ -1,5 +1,7 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
+  DraftKind,
+  DraftStatus,
   FreeAgencyOfferStatus,
   LeaguePlayerStatus,
   RosterSlotType,
@@ -61,10 +63,10 @@ export class DashboardService {
    * with one another, and a page that reads contracts at one moment and the
    * roster at another can show a team salary that never existed.
    *
-   * Deliberately **not** here: record, matchups and category standings. A
-   * league carries `scoringType: headToHead9Cat`, but nothing in the schema
-   * stores a game, a week or a box score, so there is no honest number to
-   * return. See `05-pending-work.md`.
+   * Deliberately **not** here: record, matchups and category standings. Those
+   * come from the scoring engine and are league-wide rather than team-shaped,
+   * so the page reads them from the standings endpoints instead — one source
+   * per kind of number.
    */
   async team(leagueId: number, teamId: number, userId: number) {
     const league = await this.prisma.league.findFirst({
@@ -122,6 +124,7 @@ export class DashboardService {
       upcoming,
       exceptions,
       picks,
+      liveDraft,
     ] = await Promise.all([
       this.prisma.leaguePlayer.findMany({
         where: { leagueId, teamId },
@@ -192,6 +195,25 @@ export class DashboardService {
         },
         select: { seasonStartYear: true, round: true, originalTeamId: true },
         orderBy: [{ seasonStartYear: 'asc' }, { round: 'asc' }],
+      }),
+      // A running draft, and the slot it is waiting on. The first unpicked
+      // slot is the pick on the clock — the same rule the draft room's board
+      // settles against, read here rather than recomputed.
+      this.prisma.leagueDraft.findFirst({
+        where: { leagueId, status: DraftStatus.inProgress },
+        orderBy: { startedAt: 'desc' },
+        select: {
+          id: true,
+          kind: true,
+          seasonStartYear: true,
+          slots: {
+            where: { pickedAt: null },
+            orderBy: { overall: 'asc' },
+            take: 1,
+            select: { overall: true, round: true, teamId: true },
+          },
+          _count: { select: { slots: true } },
+        },
       }),
     ]);
 
@@ -290,6 +312,7 @@ export class DashboardService {
       },
       attention: this.attention({
         teamId,
+        liveDraft,
         liveTrades,
         ownOffers,
         exceptions,
@@ -330,6 +353,12 @@ export class DashboardService {
    */
   private attention(input: {
     teamId: number;
+    liveDraft: {
+      kind: DraftKind;
+      seasonStartYear: number;
+      slots: { overall: number; round: number; teamId: number }[];
+      _count: { slots: number };
+    } | null;
     liveTrades: {
       id: number;
       status: TradeStatus;
@@ -346,6 +375,38 @@ export class DashboardService {
     overMaximum: boolean;
   }): AttentionItem[] {
     const items: AttentionItem[] = [];
+
+    // First, because it is the only item with a deadline measured in minutes.
+    // No slot left means every pick is in and the room is waiting to close,
+    // which is not something to chase anybody about.
+    const onClock = input.liveDraft?.slots[0] ?? null;
+    if (input.liveDraft && onClock) {
+      const href =
+        input.liveDraft.kind === DraftKind.startup
+          ? '/league/draft/startup'
+          : '/league/draft/rookie';
+      const where = `Pick ${onClock.overall} of ${input.liveDraft._count.slots}, round ${onClock.round}`;
+
+      items.push(
+        onClock.teamId === input.teamId
+          ? {
+              kind: 'draftOnTheClock',
+              severity: 'action',
+              title: 'You are on the clock',
+              detail: `${where}. The pick is made for you if the clock runs out.`,
+              href,
+              count: 1,
+            }
+          : {
+              kind: 'draftLive',
+              severity: 'info',
+              title: 'The draft is live',
+              detail: `${where}. Another team is picking.`,
+              href,
+              count: 1,
+            },
+      );
+    }
 
     const awaitingThisTeam = input.liveTrades.filter((trade) =>
       trade.teams.some(

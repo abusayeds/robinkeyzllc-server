@@ -7,11 +7,12 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
-import { TradeAssetKind } from '@prisma/client';
+import { PickProtectionOutcome, TradeAssetKind } from '@prisma/client';
 
 export class TradeAssetDto {
   @IsEnum(TradeAssetKind)
@@ -47,6 +48,37 @@ export class TradeAssetDto {
   @IsInt()
   @Min(1)
   draftPickId?: number;
+
+  // Rule 12.5 — the pick changes hands only if it falls outside the top N of
+  // its round. Left out, or zero, means unprotected. The ceiling is the first
+  // round's own size, which the service checks against the league's settings.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(60)
+  protectedTopN?: number;
+
+  // Rule 12.6 — what happens in the year the protection holds. Required once
+  // a protection is set, because a protection with no outcome leaves the
+  // obligation undefined.
+  @IsOptional()
+  @IsEnum(PickProtectionOutcome)
+  protectionOutcome?: PickProtectionOutcome;
+
+  // Rule 12.7 — a rollover must name the year the pick finally conveys
+  // unprotected.
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(2000)
+  @Max(2100)
+  protectionFinalYear?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(280)
+  protectionNote?: string;
 }
 
 export class ProposeTradeDto {

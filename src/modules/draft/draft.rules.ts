@@ -1,4 +1,4 @@
-import { DraftFormat } from '@prisma/client';
+import { DraftFormat, PickProtectionOutcome } from '@prisma/client';
 
 /**
  * Article 12 of the AVORA CBA, as pure functions.
@@ -14,6 +14,45 @@ export const draftYearLabel = (seasonStartYear: number) =>
 
 export const roundLabel = (round: number) =>
   round === 1 ? '1st Round' : round === 2 ? '2nd Round' : `Round ${round}`;
+
+/**
+ * How a pick is named wherever it appears — the trade builder, the asset
+ * picker, a trade's detail, the transaction log and League News. One format,
+ * so the same pick is not "2027 1st" on one page and "2027 1st Round Pick"
+ * on the next.
+ */
+export const pickLabel = (seasonStartYear: number, round: number) =>
+  `${draftYearLabel(seasonStartYear)} ${roundLabel(round)} Pick`;
+
+/**
+ * Rules 12.5-12.7 in one sentence, for wherever a protected pick is shown.
+ *
+ * Top-14 is written as "Lottery protected" because that is what every owner
+ * calls it, and the two mean the same thing: the pick conveys only if it falls
+ * outside the lottery.
+ */
+export function protectionLabel(
+  topN: number | null,
+  outcome: PickProtectionOutcome | null,
+  finalYear: number | null,
+): string {
+  if (!topN) return 'Unprotected';
+
+  const cover = topN === 14 ? 'Lottery protected' : `Top-${topN} protected`;
+
+  switch (outcome) {
+    case 'rollover':
+      return finalYear
+        ? `${cover}, rolls over to ${draftYearLabel(finalYear)} unprotected`
+        : `${cover}, rolls over`;
+    case 'convert':
+      return `${cover}, converts to a second-round pick`;
+    case 'end':
+      return `${cover}, obligation ends if it holds`;
+    default:
+      return cover;
+  }
+}
 
 /**
  * Rule 12.1 — picks may be traded up to `windowDrafts` drafts ahead. The

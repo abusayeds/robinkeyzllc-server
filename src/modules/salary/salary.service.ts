@@ -1,5 +1,11 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { LeaguePlayerStatus, Prisma } from '@prisma/client';
+import {
+  ContractOptionType,
+  ContractType,
+  GuaranteeType,
+  LeaguePlayerStatus,
+  Prisma,
+} from '@prisma/client';
 import { AppError } from '../../common/errors/appError';
 import { PrismaService } from '../../prisma/prisma.service';
 import { parseSeasonLabel } from '../../utils/season';
@@ -64,6 +70,100 @@ export class SalaryService {
    * rights it still owns. A single payroll figure would hide which of the three
    * a team is actually in trouble with.
    */
+  /**
+   * A commissioner corrects one contract.
+   *
+   * Imports and real life disagree, so the figures have to be editable
+   * without re-uploading a whole league. Only the seasons sent are touched,
+   * and a two-way deal stays at a zero cap hit however it is edited — that
+   * is what makes it a two-way deal rather than a cheap contract.
+   */
+  async editContract(
+    leagueId: number,
+    contractId: number,
+    years: {
+      seasonStartYear: number;
+      salary: number;
+      capHit?: number;
+      optionType?: ContractOptionType | null;
+      guaranteeType?: GuaranteeType;
+      guaranteedAmount?: number | null;
+    }[],
+  ) {
+    const contract = await this.prisma.contract.findFirst({
+      where: { id: contractId, leagueId },
+      select: {
+        id: true,
+        contractType: true,
+        leaguePlayer: {
+          select: { id: true, player: { select: { name: true } } },
+        },
+        years: { select: { seasonStartYear: true } },
+      },
+    });
+    if (!contract) {
+      throw new AppError(HttpStatus.NOT_FOUND, 'Contract not found');
+    }
+
+    const isTwoWay = contract.contractType === ContractType.twoWay;
+    const known = new Set(contract.years.map((year) => year.seasonStartYear));
+
+    for (const year of years) {
+      if (!known.has(year.seasonStartYear)) {
+        throw new AppError(
+          HttpStatus.BAD_REQUEST,
+          `This contract has no ${year.seasonStartYear}-${String((year.seasonStartYear + 1) % 100).padStart(2, '0')} season. Add the year on the import, or edit a season it has.`,
+        );
+      }
+      if (
+        year.guaranteeType === GuaranteeType.partial &&
+        (year.guaranteedAmount === null || year.guaranteedAmount === undefined)
+      ) {
+        throw new AppError(
+          HttpStatus.BAD_REQUEST,
+          'A partially guaranteed season needs the guaranteed amount.',
+        );
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const year of years) {
+        await tx.contractYear.update({
+          where: {
+            contractId_seasonStartYear: {
+              contractId,
+              seasonStartYear: year.seasonStartYear,
+            },
+          },
+          data: {
+            salary: year.salary,
+            capHit: isTwoWay ? 0 : (year.capHit ?? year.salary),
+            ...(year.optionType !== undefined
+              ? { optionType: year.optionType }
+              : {}),
+            ...(year.guaranteeType !== undefined
+              ? { guaranteeType: year.guaranteeType }
+              : {}),
+            ...(year.guaranteedAmount !== undefined
+              ? {
+                  guaranteedAmount:
+                    year.guaranteeType === GuaranteeType.partial
+                      ? year.guaranteedAmount
+                      : null,
+                }
+              : {}),
+          },
+        });
+      }
+    });
+
+    return {
+      contractId,
+      playerName: contract.leaguePlayer.player.name,
+      updated: years.length,
+    };
+  }
+
   async overview(leagueId: number, season?: number) {
     const league = await this.prisma.league.findFirst({
       where: { id: leagueId, isDeleted: false },

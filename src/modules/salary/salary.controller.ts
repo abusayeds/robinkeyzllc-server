@@ -1,21 +1,48 @@
 import {
+  Body,
   Controller,
   Get,
   HttpStatus,
   Param,
   ParseIntPipe,
+  Patch,
   Query,
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { LeagueAuth } from '../../common/decorators/league-auth.decorator';
 import { sendResponse } from '../../utils/sendResponse';
+import { leagueRole } from '../../utils/role';
+import { EditContractDto } from './dto/edit-contract.dto';
 import { SalaryOverviewDto } from './dto/salary-overview.dto';
 import { SalaryService } from './salary.service';
 
 @Controller('leagues/:leagueId/salaries')
 export class SalaryController {
   constructor(private readonly salaryService: SalaryService) {}
+
+  /** A commissioner corrects one contract from the Salary Management table. */
+  @Patch('contracts/:contractId')
+  @LeagueAuth(leagueRole.commissioner, leagueRole.coCommissioner)
+  async editContract(
+    @Res() res: Response,
+    @Param('leagueId', ParseIntPipe) leagueId: number,
+    @Param('contractId', ParseIntPipe) contractId: number,
+    @Body() payload: EditContractDto,
+  ) {
+    const data = await this.salaryService.editContract(
+      leagueId,
+      contractId,
+      payload.years,
+    );
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'Contract updated successfully',
+      data,
+    });
+  }
 
   // Declared before the ':teamId' style routes would be, and before anything
   // that could read "outlook" as an id.

@@ -23,19 +23,21 @@ model Team {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  league          League            @relation(fields: [leagueId], references: [id], onDelete: Cascade)
-  members         TeamMember[]
-  leaguePlayers   LeaguePlayer[]
-  contracts       Contract[]
-  deadMoney       DeadMoney[]
-  waivers         Waiver[]
-  capHolds        CapHold[]
-  importRows      ImportRow[]
-  faOffers        FreeAgencyOffer[]
-  tradeTeams      TradeTeam[]
-  tradeAssetsOut  TradeAsset[]      @relation("tradeAssetsOut")
-  tradeAssetsIn   TradeAsset[]      @relation("tradeAssetsIn")
-  tradeExceptions TradeException[]
+  league            League            @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  members           TeamMember[]
+  leaguePlayers     LeaguePlayer[]
+  contracts         Contract[]
+  deadMoney         DeadMoney[]
+  waivers           Waiver[]
+  capHolds          CapHold[]
+  importRows        ImportRow[]
+  faOffers          FreeAgencyOffer[]
+  tradeTeams        TradeTeam[]
+  tradeAssetsOut    TradeAsset[]      @relation("tradeAssetsOut")
+  tradeAssetsIn     TradeAsset[]      @relation("tradeAssetsIn")
+  tradeExceptions   TradeException[]
+  tradeBlockEntries TradeBlockEntry[]
+  recordEntries     TeamRecordEntry[]
 
   draftOrderSlots  DraftOrderSlot[]
   draftPicksOrigin DraftPick[]       @relation("draftPicksOriginal")

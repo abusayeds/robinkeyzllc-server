@@ -25,5 +25,7 @@ model User {
   tradesProposed        Trade[]           @relation("tradesProposed")
   tradesApproved        Trade[]           @relation("tradesApproved")
   tradeResponses        TradeTeam[]       @relation("tradeResponses")
+  tradeBlockListings    TradeBlockEntry[] @relation("tradeBlockListings")
+  teamRecordEdits       TeamRecordEntry[]
   draftPickEvents       DraftPickEvent[]
 }

@@ -12,29 +12,32 @@ model League {
   createdAt   DateTime         @default(now())
   updatedAt   DateTime         @updatedAt
 
-  createdBy       User                  @relation(fields: [createdById], references: [id])
-  members         LeagueMember[]
-  teams           Team[]
-  teamMembers     TeamMember[]
-  contents        LeagueContent[]
-  settings        LeagueSettings?
-  calendarEvents  LeagueCalendarEvent[]
-  notifications   Notification[]
-  invites         LeagueInvite[]
-  leaguePlayers   LeaguePlayer[]
-  contracts       Contract[]
-  deadMoney       DeadMoney[]
-  waivers         Waiver[]
-  capHolds        CapHold[]
-  importBatches   ImportBatch[]
-  faOffers        FreeAgencyOffer[]
-  trades          Trade[]
-  tradeExceptions TradeException[]
-  drafts          LeagueDraft[]
-  draftPicks      DraftPick[]
-  hardCaps        TeamHardCap[]
-  scheduleWeeks   ScheduleWeek[]
-  matchups        Matchup[]
+  createdBy         User                  @relation(fields: [createdById], references: [id])
+  members           LeagueMember[]
+  teams             Team[]
+  teamMembers       TeamMember[]
+  contents          LeagueContent[]
+  newsItems         LeagueNewsItem[]
+  teamRecords       TeamRecordEntry[]
+  settings          LeagueSettings?
+  calendarEvents    LeagueCalendarEvent[]
+  notifications     Notification[]
+  invites           LeagueInvite[]
+  leaguePlayers     LeaguePlayer[]
+  contracts         Contract[]
+  deadMoney         DeadMoney[]
+  waivers           Waiver[]
+  capHolds          CapHold[]
+  importBatches     ImportBatch[]
+  faOffers          FreeAgencyOffer[]
+  trades            Trade[]
+  tradeExceptions   TradeException[]
+  tradeBlockEntries TradeBlockEntry[]
+  drafts            LeagueDraft[]
+  draftPicks        DraftPick[]
+  hardCaps          TeamHardCap[]
+  scheduleWeeks     ScheduleWeek[]
+  matchups          Matchup[]
 
   @@index([createdById])
   @@index([visibility, isDeleted])

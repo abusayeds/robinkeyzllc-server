@@ -27,16 +27,23 @@ model LeaguePlayer {
   supermaxEligible    Boolean @default(false)
   rookieMax30Eligible Boolean @default(false)
 
+  // Rule 5.9 — set when a trade that moved this player is processed, and the
+  // two-month aggregation wait is measured from it. Null for a player who has
+  // never been traded, and for one absorbed into cap room, which the rule
+  // exempts. Cleared when he leaves the team by any other route.
+  tradeAcquiredAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  league      League            @relation(fields: [leagueId], references: [id], onDelete: Cascade)
-  player      Player            @relation(fields: [playerId], references: [id], onDelete: Restrict)
-  team        Team?             @relation(fields: [teamId], references: [id], onDelete: SetNull)
-  contracts   Contract[]
-  capHolds    CapHold[]
-  faOffers    FreeAgencyOffer[]
-  tradeAssets TradeAsset[]
+  league          League            @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  player          Player            @relation(fields: [playerId], references: [id], onDelete: Restrict)
+  team            Team?             @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  contracts       Contract[]
+  capHolds        CapHold[]
+  faOffers        FreeAgencyOffer[]
+  tradeAssets     TradeAsset[]
+  tradeBlockEntry TradeBlockEntry?
 
   // One row per player per league: an import that produces two contract rows
   // for the same player is refused here as well as in the preview.

@@ -82,6 +82,16 @@ model TradeAsset {
   // trade was judged to be.
   salary Int @default(0)
 
+  // Rules 12.5-12.7 — the protection the two sides agreed on for a pick in
+  // this trade, held here until the trade processes and written onto the pick
+  // itself then. Kept separate from the pick's own fields so an offer that is
+  // never accepted changes nothing, and so a trade's detail can still show
+  // the terms it was agreed on.
+  protectedTopN       Int?
+  protectionOutcome   PickProtectionOutcome?
+  protectionFinalYear Int?
+  protectionNote      String?
+
   trade          Trade           @relation(fields: [tradeId], references: [id], onDelete: Cascade)
   fromTeam       Team            @relation("tradeAssetsOut", fields: [fromTeamId], references: [id], onDelete: Cascade)
   toTeam         Team            @relation("tradeAssetsIn", fields: [toTeamId], references: [id], onDelete: Cascade)
@@ -123,4 +133,36 @@ model TradeException {
   movedIn     TradeAsset[] @relation("tradeExceptionMoved")
 
   @@index([leagueId, teamId, isActive])
+}
+
+// A player his own team has said it would move. Not a CBA concept — nothing in
+// the rule book mentions a trade block — so it carries no money and blocks
+// nothing. It is a notice board, and a listing is deleted rather than kept
+// once the player is no longer on offer.
+model TradeBlockEntry {
+  id       Int @id @default(autoincrement())
+  leagueId Int
+  teamId   Int
+
+  leaguePlayerId Int
+
+  // What this team is after in return, written by the owner. Optional: most
+  // listings say nothing beyond the player being available.
+  note String?
+
+  listedById Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  league       League       @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  team         Team         @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  leaguePlayer LeaguePlayer @relation(fields: [leaguePlayerId], references: [id], onDelete: Cascade)
+  listedBy     User         @relation("tradeBlockListings", fields: [listedById], references: [id], onDelete: Cascade)
+
+  // One listing per player. LeaguePlayer is already league-scoped, so this is
+  // also one listing per player per league.
+  @@unique([leaguePlayerId])
+  @@index([leagueId, createdAt])
+  @@index([leagueId, teamId])
 }

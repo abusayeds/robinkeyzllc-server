@@ -111,3 +111,39 @@ model PlayerGameStat {
   // Career totals are asked for one player at a time, season by season.
   @@index([playerId, season])
 }
+
+// A season's averages as the NBA feed reports them.
+//
+// Not derived from PlayerGameStat: that table only holds the nights this
+// deployment has pulled, so averaging it gives a figure over however many
+// games happen to be stored — two, in one case the client found. The feed
+// publishes the real season averages, and where a row exists here it wins.
+model PlayerSeasonAverage {
+  id       Int @id @default(autoincrement())
+  playerId Int
+
+  // The NBA season's starting year, as balldontlie numbers them.
+  season Int
+
+  gamesPlayed Int
+  minutes     String?
+
+  pts   Float
+  reb   Float
+  ast   Float
+  stl   Float
+  blk   Float
+  to    Float
+  fg3m  Float
+  fgPct Float
+  ftPct Float
+  fg3Pct Float?
+
+  fetchedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([playerId, season])
+  @@index([season])
+}

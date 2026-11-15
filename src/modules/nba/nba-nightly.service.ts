@@ -12,10 +12,19 @@ import { SettleService } from '../scoring/settle.service';
  */
 const NIGHTLY = '0 10 * * *';
 
+/**
+ * Every half hour. A card read during a slate should not be a day behind,
+ * and the guard inside the job keeps a quiet half hour cheap.
+ */
+const REFRESH = '*/30 * * * *';
+
 /** How many nights back to re-pull, to catch a line balldontlie revised. */
 const BACKFILL_NIGHTS = 2;
 
 const isoDate = (date: Date) => date.toISOString().slice(0, 10);
+
+/** Midnight UTC on that day, which is how a game date is stored. */
+const dateOnly = (day: string) => new Date(`${day}T00:00:00Z`);
 
 const daysAgo = (days: number) => {
   const date = new Date();
@@ -41,6 +50,56 @@ export class NbaNightlyService {
    * is safe to repeat, and a missed night is fixed by asking for that date
    * again. A broker would add a thing to keep running for no gain.
    */
+  /**
+   * Every half hour while games are on.
+   *
+   * A nightly pull leaves a card a day behind, which is wrong for anyone
+   * reading it during a slate. This asks for today's lines and, only when
+   * something has actually changed, re-reads the season averages — the
+   * averages endpoint is the expensive one, so it is not asked on a quiet
+   * half hour.
+   */
+  @Cron(REFRESH, { name: 'nba-refresh' })
+  async refresh() {
+    if (!this.bdl.isConfigured) return;
+
+    try {
+      const today = isoDate(new Date());
+      const before = await this.prisma.playerGameStat.count({
+        where: { gameDate: dateOnly(today) },
+      });
+
+      await this.syncService.syncGames(today, today);
+      await this.syncService.syncStats(today);
+
+      const after = await this.prisma.playerGameStat.count({
+        where: { gameDate: dateOnly(today) },
+      });
+
+      if (after === before) return;
+
+      const season = await this.seasonForToday();
+      if (season !== null) {
+        await this.syncService.syncSeasonAverages(season);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unknown refresh failure';
+      // Swallowed for the same reason the nightly job swallows: an unhandled
+      // rejection inside a cron takes the process with it.
+      this.logger.error(`Half-hourly refresh failed: ${message}`);
+    }
+  }
+
+  /** The NBA season today's games belong to, as balldontlie numbers them. */
+  private async seasonForToday(): Promise<number | null> {
+    const latest = await this.prisma.nbaGame.findFirst({
+      orderBy: { date: 'desc' },
+      select: { season: true },
+    });
+    return latest?.season ?? null;
+  }
+
   @Cron(NIGHTLY, { name: 'nba-nightly' })
   async run() {
     if (!this.bdl.isConfigured) {

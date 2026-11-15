@@ -96,9 +96,37 @@ export class PlayerStatsService {
     const result = new Map<number, SeasonAverage>();
     if (playerIds.length === 0) return result;
 
+    // The feed's own averages first. Totalling the stored lines only covers
+    // the nights this deployment has pulled, so a player with two games in
+    // the table averaged out over two games — which is what the client saw.
+    const published = await this.prisma.playerSeasonAverage.findMany({
+      where: { playerId: { in: playerIds }, season },
+    });
+
+    for (const row of published) {
+      result.set(row.playerId, {
+        season,
+        gamesPlayed: row.gamesPlayed,
+        pts: row.pts,
+        reb: row.reb,
+        ast: row.ast,
+        stl: row.stl,
+        blk: row.blk,
+        to: row.to,
+        threes: row.fg3m,
+        fgPct: row.fgPct,
+        ftPct: row.ftPct,
+      });
+    }
+
+    // Anyone the feed had nothing for falls back to the stored lines, which
+    // is better than an empty card.
+    const missing = playerIds.filter((id) => !result.has(id));
+    if (missing.length === 0) return result;
+
     const rows = await this.prisma.playerGameStat.groupBy({
       by: ['playerId'],
-      where: { playerId: { in: playerIds }, season },
+      where: { playerId: { in: missing }, season },
       _count: { _all: true },
       _sum: {
         pts: true,

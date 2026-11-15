@@ -12,6 +12,9 @@ import { BalldontlieClient, BdlTeam } from './balldontlie.client';
  */
 const dateOnly = (value: string) => new Date(`${value.slice(0, 10)}T00:00:00Z`);
 
+/** The season-averages endpoint takes a hundred player ids per request. */
+const AVERAGES_CHUNK = 100;
+
 @Injectable()
 export class NbaSyncService {
   private readonly logger = new Logger(NbaSyncService.name);
@@ -367,6 +370,73 @@ export class NbaSyncService {
    * returning is healthy again — which is why this deletes the rows it did
    * not see rather than leaving yesterday's injuries on the board forever.
    */
+  /**
+   * A season's averages, straight from the feed.
+   *
+   * Only players some league actually rosters: the pool runs to thousands and
+   * nobody reads a card for a player nobody owns. A hundred ids per request,
+   * which is the endpoint's own ceiling.
+   */
+  async syncSeasonAverages(season: number) {
+    return this.run(SyncJob.seasonAverages, async (record) => {
+      const players = await this.prisma.player.findMany({
+        where: {
+          bdlPlayerId: { not: null },
+          leaguePlayers: { some: {} },
+        },
+        select: { id: true, bdlPlayerId: true },
+      });
+
+      if (players.length === 0) return;
+
+      const idByBdl = new Map(
+        players.map((player) => [player.bdlPlayerId as number, player.id]),
+      );
+      const bdlIds = [...idByBdl.keys()];
+
+      for (let at = 0; at < bdlIds.length; at += AVERAGES_CHUNK) {
+        const chunk = bdlIds.slice(at, at + AVERAGES_CHUNK);
+        const rows = await this.bdl.seasonAverages(season, chunk);
+
+        for (const row of rows) {
+          const playerId = idByBdl.get(row.player_id);
+          if (!playerId || !row.games_played) {
+            record.skipped += 1;
+            continue;
+          }
+
+          // The feed sends percentages as a fraction; every screen in the app
+          // shows them out of a hundred.
+          const asPercent = (value: number | null) =>
+            value === null ? 0 : Math.round(value * 1000) / 10;
+
+          const data = {
+            gamesPlayed: row.games_played,
+            minutes: row.min ?? null,
+            pts: row.pts ?? 0,
+            reb: row.reb ?? 0,
+            ast: row.ast ?? 0,
+            stl: row.stl ?? 0,
+            blk: row.blk ?? 0,
+            to: row.turnover ?? 0,
+            fg3m: row.fg3m ?? 0,
+            fgPct: asPercent(row.fg_pct),
+            ftPct: asPercent(row.ft_pct),
+            fg3Pct: row.fg3_pct === null ? null : asPercent(row.fg3_pct),
+            fetchedAt: new Date(),
+          };
+
+          await this.prisma.playerSeasonAverage.upsert({
+            where: { playerId_season: { playerId, season } },
+            create: { playerId, season, ...data },
+            update: data,
+          });
+          record.updated += 1;
+        }
+      }
+    });
+  }
+
   async syncInjuries() {
     return this.run(SyncJob.injuries, async (record) => {
       const rows: {

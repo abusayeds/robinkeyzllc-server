@@ -95,6 +95,8 @@ model Player {
   importRows    ImportRow[]
   draftSlots    DraftOrderSlot[]
   gameStats     PlayerGameStat[]
+  seasonAverages  PlayerSeasonAverage[]
+  contractRefs    PlayerContractReference[]
   injury        PlayerInjury?
 
   @@index([nameNormalized])
@@ -127,4 +129,37 @@ model PlayerAlias {
   createdBy User?  @relation("playerAliasesCreated", fields: [createdById], references: [id], onDelete: SetNull)
 
   @@index([playerId])
+}
+
+// The global contract database: what a player is really paid in the NBA.
+//
+// Not from balldontlie — it publishes no contract endpoint. These rows are
+// loaded by the Super Admin and are the same for every league, which is what
+// makes them the source a Startup league draws from. A league's own Contract
+// rows always win over this; it is reference only.
+model PlayerContractReference {
+  id       Int @id @default(autoincrement())
+  playerId Int
+
+  seasonStartYear Int
+
+  salary Int
+
+  // Carried through so a startup league inherits the terms, not just a
+  // number: an option year is not a guaranteed year.
+  optionType       ContractOptionType?
+  guaranteeType    GuaranteeType       @default(full)
+  guaranteedAmount Int?
+
+  // The last season of the real deal, for "thru 2028" on a card.
+  endSeasonStartYear Int?
+
+  source    String   @default("superAdmin")
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([playerId, seasonStartYear])
+  @@index([seasonStartYear])
 }

@@ -97,6 +97,27 @@ export type BdlBoxScore = {
   visitor_team: BdlTeam & { players: BdlStatLine[] };
 };
 
+/**
+ * A season's averages as balldontlie publishes them. Percentages come back as
+ * a fraction (0.482), which is why the store multiplies them.
+ */
+export type BdlSeasonAverage = {
+  player_id: number;
+  season: number;
+  games_played: number;
+  min: string | null;
+  pts: number | null;
+  reb: number | null;
+  ast: number | null;
+  stl: number | null;
+  blk: number | null;
+  turnover: number | null;
+  fg3m: number | null;
+  fg_pct: number | null;
+  ft_pct: number | null;
+  fg3_pct: number | null;
+};
+
 export type BdlInjury = {
   player: { id: number };
   return_date: string | null;
@@ -137,6 +158,12 @@ export class BalldontlieClient {
     for (const [key, value] of Object.entries(params)) {
       url.searchParams.set(key, value);
     }
+    return this.getUrl<T>(url);
+  }
+
+  /** The same request, for a URL a caller has already built. */
+  private async getUrl<T>(url: URL) {
+    const path = url.pathname;
 
     const response = await fetch(url, {
       headers: { Authorization: this.apiKey },
@@ -235,5 +262,29 @@ export class BalldontlieClient {
   /** Every player currently carrying an injury. Cursor paginated. */
   playerInjuries() {
     return this.paginate<BdlInjury>('/v1/player_injuries');
+  }
+
+  /**
+   * A season's averages, as the feed itself reports them.
+   *
+   * Asked for rather than worked out from stored lines: this deployment only
+   * holds the nights it has pulled, so averaging those gives a figure over
+   * however many games happen to be stored. Up to a hundred players per
+   * request, which the caller chunks to.
+   */
+  async seasonAverages(
+    season: number,
+    playerIds: number[],
+  ): Promise<BdlSeasonAverage[]> {
+    if (playerIds.length === 0) return [];
+
+    const url = new URL('/v1/season_averages', BASE_URL);
+    url.searchParams.set('season', String(season));
+    for (const id of playerIds) {
+      url.searchParams.append('player_ids[]', String(id));
+    }
+
+    const page = await this.getUrl<BdlSeasonAverage>(url);
+    return page.data ?? [];
   }
 }

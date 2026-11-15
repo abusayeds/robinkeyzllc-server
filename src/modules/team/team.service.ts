@@ -103,6 +103,9 @@ export class TeamService {
     if (payload.abbr !== undefined)
       data.abbr = payload.abbr.trim().toUpperCase();
     if (payload.color !== undefined) data.color = payload.color;
+    if (payload.conference !== undefined) data.conference = payload.conference;
+    if (payload.division !== undefined)
+      data.division = payload.division?.trim() || null;
     if (payload.logo !== undefined) data.logo = payload.logo?.trim() || null;
 
     const team = await this.write(() =>
@@ -308,6 +311,8 @@ export class TeamService {
       logo: team.logo,
       owner: holder(TeamRole.owner),
       coOwner: holder(TeamRole.coOwner),
+      conference: team.conference,
+      division: team.division,
       intelStatus: team.intelStatus,
       createdAt: team.createdAt,
     };

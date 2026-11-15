@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpStatus,
   Param,
@@ -14,9 +15,12 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { LeagueAuth } from '../../common/decorators/league-auth.decorator';
 import { leagueRole } from '../../utils/role';
 import { sendResponse } from '../../utils/sendResponse';
+import { EvaluateTradeDto } from './dto/evaluate-trade.dto';
+import { ListOnTradeBlockDto } from './dto/list-on-trade-block.dto';
 import { ListTradesDto } from './dto/list-trades.dto';
 import { ProposeTradeDto } from './dto/propose-trade.dto';
 import { RejectTradeDto } from './dto/reject-trade.dto';
+import { TradeBlockService } from './trade.block.service';
 import { TradeFinderService } from './trade.finder.service';
 import { TradeService } from './trade.service';
 
@@ -25,6 +29,7 @@ export class TradeController {
   constructor(
     private readonly tradeService: TradeService,
     private readonly tradeFinderService: TradeFinderService,
+    private readonly tradeBlockService: TradeBlockService,
   ) {}
 
   // Trades are league business: everyone can see what has been proposed, and
@@ -94,6 +99,68 @@ export class TradeController {
     });
   }
 
+  /**
+   * The league trade block.
+   *
+   * Declared before the :tradeId routes, like the other named ones, so the
+   * word is never parsed as a trade id.
+   */
+  @Get('block')
+  @LeagueAuth()
+  async tradeBlock(
+    @Res() res: Response,
+    @Param('leagueId', ParseIntPipe) leagueId: number,
+    @CurrentUser('id') userId: number,
+  ) {
+    const data = await this.tradeBlockService.list(leagueId, userId);
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'Trade block retrieved successfully',
+      data,
+    });
+  }
+
+  @Post('block')
+  @LeagueAuth()
+  async listOnBlock(
+    @Res() res: Response,
+    @Param('leagueId', ParseIntPipe) leagueId: number,
+    @CurrentUser('id') userId: number,
+    @Body() payload: ListOnTradeBlockDto,
+  ) {
+    const data = await this.tradeBlockService.add(leagueId, userId, payload);
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'Player listed on the trade block',
+      data,
+    });
+  }
+
+  @Delete('block/:leaguePlayerId')
+  @LeagueAuth()
+  async removeFromBlock(
+    @Res() res: Response,
+    @Param('leagueId', ParseIntPipe) leagueId: number,
+    @Param('leaguePlayerId', ParseIntPipe) leaguePlayerId: number,
+    @CurrentUser('id') userId: number,
+  ) {
+    const data = await this.tradeBlockService.remove(
+      leagueId,
+      userId,
+      leaguePlayerId,
+    );
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'Player removed from the trade block',
+      data,
+    });
+  }
   @Get(':tradeId')
   @LeagueAuth()
   async findOne(
@@ -127,6 +194,29 @@ export class TradeController {
       statusCode: HttpStatus.CREATED,
       success: true,
       message: 'Trade proposed successfully',
+      data,
+    });
+  }
+
+  /**
+   * What the rules say about a trade nobody has sent yet.
+   *
+   * Declared before the :tradeId routes so the word is never read as an id.
+   */
+  @Post('evaluate')
+  @LeagueAuth()
+  async evaluate(
+    @Res() res: Response,
+    @Param('leagueId', ParseIntPipe) leagueId: number,
+    @CurrentUser('id') userId: number,
+    @Body() payload: EvaluateTradeDto,
+  ) {
+    const data = await this.tradeService.evaluate(leagueId, userId, payload);
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'Trade evaluated successfully',
       data,
     });
   }

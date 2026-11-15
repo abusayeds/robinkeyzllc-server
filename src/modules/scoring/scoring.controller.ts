@@ -1,17 +1,21 @@
 import {
+  Body,
   Controller,
   Get,
   HttpStatus,
   Param,
   ParseIntPipe,
+  Patch,
   Post,
   Query,
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { LeagueAuth } from '../../common/decorators/league-auth.decorator';
 import { sendResponse } from '../../utils/sendResponse';
 import { leagueRole } from '../../utils/role';
+import { SetTeamRecordDto } from './dto/set-record.dto';
 import { MatchupService } from './matchup.service';
 import { ScheduleService } from './schedule.service';
 import { SettleService } from './settle.service';
@@ -46,6 +50,37 @@ export class StandingsController {
    * same rows the League tab shows combined, so fetching it twice would only
    * risk the two disagreeing.
    */
+  /**
+   * An owner enters their own record.
+   *
+   * AVORA does not score games, so a league brings its results in from
+   * wherever it actually plays. The whole table comes back, because one
+   * record changing reorders everybody.
+   */
+  @Patch('teams/:teamId/record')
+  @LeagueAuth()
+  async setRecord(
+    @Res() res: Response,
+    @Param('leagueId', ParseIntPipe) leagueId: number,
+    @Param('teamId', ParseIntPipe) teamId: number,
+    @CurrentUser('id') userId: number,
+    @Body() payload: SetTeamRecordDto,
+  ) {
+    const standings = await this.standingsService.setRecord(
+      leagueId,
+      teamId,
+      userId,
+      payload,
+    );
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'Record updated successfully',
+      data: { standings },
+    });
+  }
+
   @Get()
   @LeagueAuth()
   async table(

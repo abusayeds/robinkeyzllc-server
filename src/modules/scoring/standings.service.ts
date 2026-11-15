@@ -1,5 +1,10 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { Conference, PlayoffRound, WeekPhase } from '@prisma/client';
+import {
+  Conference,
+  LeagueRole,
+  PlayoffRound,
+  WeekPhase,
+} from '@prisma/client';
 import { AppError } from '../../common/errors/appError';
 import { PrismaService } from '../../prisma/prisma.service';
 import { parseSeasonLabel } from '../../utils/season';
@@ -41,6 +46,9 @@ export type StandingsRow = {
   w: number;
   l: number;
   t: number;
+  /** True when an owner typed this record in rather than it being tallied. */
+  enteredByOwner: boolean;
+  recordUpdatedAt: string | null;
   /** Record inside the team's own division, or its conference when it has none. */
   div: string;
   l10: string;
@@ -78,6 +86,72 @@ export class StandingsService {
    * is a second thing that can be wrong. Twenty-odd weeks of a dozen teams is
    * a few hundred rows.
    */
+  /**
+   * An owner enters their own record.
+   *
+   * Only for a team they hold, or any team if they run the league. The rank
+   * stays worked out from the table — nobody types that in.
+   */
+  async setRecord(
+    leagueId: number,
+    teamId: number,
+    userId: number,
+    record: { wins: number; losses: number; ties: number },
+  ) {
+    const [team, holder, membership] = await Promise.all([
+      this.prisma.team.findFirst({
+        where: { id: teamId, leagueId },
+        select: { id: true },
+      }),
+      this.prisma.teamMember.findFirst({
+        where: { leagueId, teamId, userId },
+        select: { teamId: true },
+      }),
+      this.prisma.leagueMember.findFirst({
+        where: { leagueId, userId },
+        select: { role: true },
+      }),
+    ]);
+
+    if (!team) {
+      throw new AppError(HttpStatus.NOT_FOUND, 'Team not found in this league');
+    }
+
+    const runsLeague =
+      membership?.role === LeagueRole.commissioner ||
+      membership?.role === LeagueRole.coCommissioner;
+
+    if (!holder && !runsLeague) {
+      throw new AppError(
+        HttpStatus.FORBIDDEN,
+        'Only the team holder, or a commissioner, can set that record.',
+      );
+    }
+
+    const { seasonStartYear } = await this.seasonOf(leagueId);
+
+    await this.prisma.teamRecordEntry.upsert({
+      where: { teamId_seasonStartYear: { teamId, seasonStartYear } },
+      create: {
+        leagueId,
+        teamId,
+        seasonStartYear,
+        wins: record.wins,
+        losses: record.losses,
+        ties: record.ties,
+        updatedById: userId,
+      },
+      update: {
+        wins: record.wins,
+        losses: record.losses,
+        ties: record.ties,
+        updatedById: userId,
+      },
+    });
+
+    return this.table(leagueId, seasonStartYear);
+  }
+
   async table(leagueId: number, forSeason?: number) {
     // Callers inside this module already know the year; the settle service
     // does not, so it is looked up rather than demanded.
@@ -198,8 +272,28 @@ export class StandingsService {
       }
     }
 
+    // AVORA does not score games: a league plays on Fantrax, ESPN or Yahoo
+    // and brings its results here. A record an owner typed in is therefore
+    // the truth for that team, and the settled-matchup tally only fills in
+    // for teams nobody has entered one for.
+    const entered = new Map(
+      (
+        await this.prisma.teamRecordEntry.findMany({
+          where: { leagueId, seasonStartYear },
+          select: {
+            teamId: true,
+            wins: true,
+            losses: true,
+            ties: true,
+            updatedAt: true,
+          },
+        })
+      ).map((row) => [row.teamId, row]),
+    );
+
     const rows: StandingsRow[] = teams.map((team) => {
       const row = tally.get(team.id) as Tally;
+      const own = entered.get(team.id);
       return {
         id: team.id,
         team: team.name,
@@ -208,9 +302,11 @@ export class StandingsService {
         color: team.color,
         conference: CONFERENCE_LABEL[team.conference],
         conferenceKey: team.conference,
-        w: row.w,
-        l: row.l,
-        t: row.t,
+        w: own?.wins ?? row.w,
+        l: own?.losses ?? row.l,
+        t: own?.ties ?? row.t,
+        enteredByOwner: own !== undefined,
+        recordUpdatedAt: own?.updatedAt.toISOString() ?? null,
         div: `${row.divWins}-${row.divLosses}`,
         l10: lastNRecord(row.results, RECENT_WEEKS),
         streak: streak(row.results),

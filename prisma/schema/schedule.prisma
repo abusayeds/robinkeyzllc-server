@@ -134,3 +134,33 @@ model MatchupTeamStat {
   @@unique([matchupId, teamId])
   @@index([teamId])
 }
+
+// A record an owner typed in themselves.
+//
+// AVORA does not score games: a league plays on Fantrax, ESPN or Yahoo and
+// brings its results here. Where one of these rows exists it is the team's
+// record, and the settled-matchup tally is only used for teams without one.
+model TeamRecordEntry {
+  id       Int @id @default(autoincrement())
+  leagueId Int
+  teamId   Int
+
+  seasonStartYear Int
+
+  wins   Int @default(0)
+  losses Int @default(0)
+  ties   Int @default(0)
+
+  updatedById Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  league    League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  team      Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  updatedBy User?  @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  // One record per team per season, so an owner editing twice replaces it.
+  @@unique([teamId, seasonStartYear])
+  @@index([leagueId, seasonStartYear])
+  @@index([updatedById])
+}

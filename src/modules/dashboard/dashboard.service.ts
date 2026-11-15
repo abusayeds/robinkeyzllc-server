@@ -81,6 +81,7 @@ export class DashboardService {
             minRosterSize: true,
             maxRosterSize: true,
             maxTwoWay: true,
+            pickTradingWindowDrafts: true,
           },
         },
       },
@@ -88,6 +89,8 @@ export class DashboardService {
     if (!league) {
       throw new AppError(HttpStatus.NOT_FOUND, 'League not found');
     }
+
+    const pickWindow = league.settings?.pickTradingWindowDrafts ?? 7;
 
     const team = await this.prisma.team.findFirst({
       where: { id: teamId, leagueId },
@@ -186,12 +189,18 @@ export class DashboardService {
           expiresAt: true,
         },
       }),
+      // Rule 12.1 — only as many drafts ahead as the league trades in. The
+      // card used to list every future year it found, which in a league that
+      // generated picks far out ran off the bottom of it.
       this.prisma.draftPick.findMany({
         where: {
           leagueId,
           currentTeamId: teamId,
           usedAt: null,
-          seasonStartYear: { gte: seasonStartYear },
+          seasonStartYear: {
+            gte: seasonStartYear,
+            lte: seasonStartYear + pickWindow,
+          },
         },
         select: { seasonStartYear: true, round: true, originalTeamId: true },
         orderBy: [{ seasonStartYear: 'asc' }, { round: 'asc' }],

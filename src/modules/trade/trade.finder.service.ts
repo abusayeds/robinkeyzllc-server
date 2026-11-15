@@ -66,6 +66,11 @@ export class TradeFinderService {
         // injured-reserve slot is not a trade asset, so neither belongs on a
         // board of players to go after.
         slotType: RosterSlotType.standard,
+        // Only players a team has actually put up. The board used to list
+        // every rostered player in the league, which made it a roster
+        // browser: there was no way to tell who was available from who was
+        // simply on a team.
+        tradeBlockEntry: { isNot: null },
       },
       orderBy: { player: { lastName: 'asc' } },
       select: {

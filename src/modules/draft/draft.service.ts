@@ -442,16 +442,26 @@ export class DraftService {
       }),
     ]);
 
+    // A startup draft takes its salaries from the global contract database,
+    // which the Super Admin loads: balldontlie publishes no contract
+    // endpoint, so there is nothing to sync them from. A rookie draft does
+    // not need it — Rule 11.8's scale sets those.
+    const referenced =
+      kind === DraftKind.startup
+        ? await this.prisma.playerContractReference.count({
+            where: { seasonStartYear },
+          })
+        : 0;
+
     return {
       total,
       drafted: taken,
       available: Math.max(total - taken, 0),
-      // balldontlie's contract endpoints are not synced yet, so a startup
-      // player's salary has no source and the column is left empty rather
-      // than filled with a number nobody chose.
       contractSource:
-        kind === DraftKind.startup ? 'balldontlie' : 'rookieScale',
-      contractsAvailable: false,
+        kind === DraftKind.startup ? 'globalContractDatabase' : 'rookieScale',
+      contractsAvailable: kind === DraftKind.startup ? referenced > 0 : true,
+      /** How many players the global database has terms for this season. */
+      contractsReferenced: referenced,
     };
   }
 

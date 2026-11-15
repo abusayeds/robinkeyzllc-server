@@ -15,7 +15,9 @@ import { role } from '../../utils/role';
 import { parseSeasonLabel } from '../../utils/season';
 import { sendResponse } from '../../utils/sendResponse';
 import { PrismaService } from '../../prisma/prisma.service';
+import { GuaranteeType } from '@prisma/client';
 import { CapYearDto } from './dto/cap-year.dto';
+import { ContractReferenceDto } from './dto/contract-reference.dto';
 import { CapService } from './cap.service';
 import { HardCapService } from './hard-cap.service';
 
@@ -73,6 +75,74 @@ export class CapController {
       success: true,
       message: 'Cap year saved successfully',
       data,
+    });
+  }
+
+  /**
+   * Loads the global contract database.
+   *
+   * Not a sync: balldontlie publishes no contract endpoint, so the figures
+   * come in from whatever the Super Admin has. A Startup league reads this
+   * when a player is drafted, which is what keeps the numbers the same in
+   * every league.
+   */
+  @Put('contracts')
+  @Auth(role.superAdmin)
+  async loadContracts(
+    @Res() res: Response,
+    @Body() payload: ContractReferenceDto,
+  ) {
+    const bdlIds = [...new Set(payload.rows.map((row) => row.bdlPlayerId))];
+    const players = await this.prisma.player.findMany({
+      where: { bdlPlayerId: { in: bdlIds } },
+      select: { id: true, bdlPlayerId: true },
+    });
+    const idByBdl = new Map(
+      players.map((player) => [player.bdlPlayerId as number, player.id]),
+    );
+
+    let written = 0;
+    const unknown: number[] = [];
+
+    for (const row of payload.rows) {
+      const playerId = idByBdl.get(row.bdlPlayerId);
+      if (!playerId) {
+        unknown.push(row.bdlPlayerId);
+        continue;
+      }
+
+      const data = {
+        salary: row.salary,
+        optionType: row.optionType ?? null,
+        guaranteeType: row.guaranteeType ?? GuaranteeType.full,
+        guaranteedAmount: row.guaranteedAmount ?? null,
+        endSeasonStartYear: row.endSeasonStartYear ?? null,
+        source: row.source?.trim() || 'superAdmin',
+      };
+
+      await this.prisma.playerContractReference.upsert({
+        where: {
+          playerId_seasonStartYear: {
+            playerId,
+            seasonStartYear: row.seasonStartYear,
+          },
+        },
+        create: { playerId, seasonStartYear: row.seasonStartYear, ...data },
+        update: data,
+      });
+      written += 1;
+    }
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'Contract database loaded successfully',
+      data: {
+        written,
+        // Players this deployment has never synced. Worth naming rather than
+        // silently dropping: it usually means the player sync has not run.
+        skippedUnknownPlayers: [...new Set(unknown)],
+      },
     });
   }
 }

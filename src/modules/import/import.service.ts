@@ -19,6 +19,7 @@ import {
   ClassifiedRow,
   classifyRow,
   findCrossRowIssues,
+  isFreeAgentTeam,
   parseSeasonLabel,
   readContractType,
   readSignedVia,
@@ -170,7 +171,7 @@ export class ImportService {
     leagueId: number,
     batchId: number,
     rowId: number,
-    playerId: number,
+    choice: { playerId?: number; createPlayer?: boolean },
     userId: number,
   ) {
     const row = await this.prisma.importRow.findFirst({
@@ -178,6 +179,26 @@ export class ImportService {
     });
     if (!row) {
       throw new AppError(HttpStatus.NOT_FOUND, 'Import row not found');
+    }
+
+    let playerId = choice.playerId;
+
+    if (choice.createPlayer) {
+      if (playerId) {
+        throw new AppError(
+          HttpStatus.BAD_REQUEST,
+          'Either pick an existing player or create a new one, not both.',
+        );
+      }
+      const created = await this.playerService.createFromName(row.rawPlayer);
+      playerId = created.id;
+    }
+
+    if (!playerId) {
+      throw new AppError(
+        HttpStatus.BAD_REQUEST,
+        'Pick a player for this row, or ask for one to be created.',
+      );
     }
 
     await this.playerService.rememberAlias(playerId, row.rawPlayer, userId);
@@ -240,6 +261,28 @@ export class ImportService {
       for (const row of preview.rows) {
         const seasons = row.rawSeasons as Record<string, string>;
         const cells = this.cellsOf(seasons);
+
+        // Read back from the team column rather than stored, so a league
+        // imported before free agents were supported still reads correctly.
+        const freeAgent = isFreeAgentTeam(row.rawTeam);
+
+        // A free agent belongs to nobody: he joins the pool and that is all.
+        // Money against him would have to belong to a team, and there isn't
+        // one — a cap hold is the team holding his rights, which is a
+        // different row type.
+        if (freeAgent) {
+          await tx.leaguePlayer.create({
+            data: {
+              leagueId,
+              playerId: row.playerId!,
+              teamId: null,
+              status: LeaguePlayerStatus.freeAgent,
+              birdYears: Number(row.rawBirdYears ?? 0) || 0,
+              slotType: RosterSlotType.standard,
+            },
+          });
+          continue;
+        }
 
         if (row.rowType === ImportRowType.deadCap) {
           for (const [year, cell] of cells) {
@@ -379,8 +422,12 @@ export class ImportService {
       const match = matches[index];
       const issues: RowIssue[] = [...row.issues];
 
-      const teamId = teamByKey.get(row.team.trim().toUpperCase()) ?? null;
-      if (row.team.trim() && teamId === null) {
+      const teamId = row.isFreeAgent
+        ? null
+        : (teamByKey.get(row.team.trim().toUpperCase()) ?? null);
+
+      // "Free Agent" in the team column is a destination, not a missing team.
+      if (!row.isFreeAgent && row.team.trim() && teamId === null) {
         issues.push({
           field: 'team',
           message: `No team in this league is called "${row.team.trim()}".`,
@@ -392,7 +439,7 @@ export class ImportService {
         issues.push({
           field: 'player',
           message: `No NBA player matches "${row.player.trim()}".`,
-          fix: 'Search for the right player, or remove the row and re-upload.',
+          fix: 'Search for the right player, or create him from this name — a dynasty league holds people the NBA feed does not.',
         });
       }
       if (match.status === NameMatchStatus.needsReview) {

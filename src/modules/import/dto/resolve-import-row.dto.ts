@@ -1,10 +1,20 @@
 import { Type } from 'class-transformer';
-import { IsInt, Min } from 'class-validator';
+import { IsBoolean, IsInt, IsOptional, Min } from 'class-validator';
 
-/** The player the commissioner says this row really meant. */
+/**
+ * How a row's player is settled: either the commissioner names the player it
+ * really meant, or asks for one to be created from the name in the file
+ * because the NBA feed has nobody by it.
+ */
 export class ResolveImportRowDto {
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  playerId!: number;
+  playerId?: number;
+
+  /** Creates a league-only player from the row's own name. */
+  @IsOptional()
+  @IsBoolean()
+  createPlayer?: boolean;
 }

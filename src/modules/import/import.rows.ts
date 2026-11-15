@@ -34,6 +34,8 @@ export type ClassifiedRow = RawRow & {
   parsedContractType: ContractType | null;
   parsedSignedVia: SignedVia | null;
   parsedSignedSeasonStartYear: number | null;
+  /** The team column said Free Agent, so this row belongs to nobody. */
+  isFreeAgent: boolean;
   issues: RowIssue[];
 };
 
@@ -68,6 +70,16 @@ const CONTRACT_TYPE_CHOICES =
 const SIGNED_VIA_CHOICES =
   'Cap Space, Non-Taxpayer MLE, Taxpayer MLE, Room MLE, Bi-Annual Exception, Disabled Player Exception';
 
+/**
+ * What a commissioner writes in the team column for a player nobody holds.
+ * A free agent still belongs in the file: he is part of the league's pool,
+ * and leaving him out would make the import look like he does not exist.
+ */
+const FREE_AGENT_TEAMS = new Set(['FREE AGENT', 'FREE AGENTS', 'FA', 'NONE']);
+
+export const isFreeAgentTeam = (team: string) =>
+  FREE_AGENT_TEAMS.has(label(team));
+
 const SIGNED_VIA: Record<string, SignedVia> = {
   'CAP SPACE': SignedVia.capSpace,
   'NON TAXPAYER MLE': SignedVia.nonTaxpayerMle,
@@ -83,6 +95,7 @@ const SIGNED_VIA: Record<string, SignedVia> = {
 /** One row, read and checked on its own. Cross-row rules come later. */
 export function classifyRow(row: RawRow): ClassifiedRow {
   const issues: RowIssue[] = [];
+  const freeAgent = isFreeAgentTeam(row.team);
   const cells: Record<number, ParsedCell> = {};
 
   let salaryCount = 0;
@@ -133,7 +146,9 @@ export function classifyRow(row: RawRow): ClassifiedRow {
 
   // Only worth saying when nothing could be read at all. If a cell was already
   // reported as unreadable, this would just be the same problem a second time.
-  if (rowType === ImportRowType.unknown && invalidCount === 0) {
+  // A free agent with no money against him is the normal case, not a
+  // mistake: he is in the pool and nobody is paying him.
+  if (rowType === ImportRowType.unknown && invalidCount === 0 && !freeAgent) {
     issues.push({
       field: 'seasons',
       message:
@@ -220,6 +235,7 @@ export function classifyRow(row: RawRow): ClassifiedRow {
     parsedContractType,
     parsedSignedVia,
     parsedSignedSeasonStartYear,
+    isFreeAgent: freeAgent,
     issues,
   };
 }
@@ -258,11 +274,43 @@ export function findCrossRowIssues(
 
     if (contracts.length > 1) {
       const lines = contracts.map((r) => r.lineNumber).join(', ');
+      const teams = new Set(contracts.map((r) => r.team.trim().toUpperCase()));
+      // Two teams claiming him and one team claiming him twice are different
+      // mistakes, and the fix is different, so they do not share a sentence.
+      const message =
+        teams.size > 1
+          ? `${contracts[0].player.trim()} has a contract on two teams (lines ${lines}). A player can only be signed to one team.`
+          : `${contracts[0].player.trim()} has a contract on more than one row (lines ${lines}).`;
+
       for (const row of contracts) {
         add(row.lineNumber, {
           field: 'player',
-          message: `${row.player.trim()} has a contract on more than one row (lines ${lines}).`,
-          fix: 'A player can only be under contract to one team. Remove the rows that do not belong.',
+          message,
+          fix:
+            teams.size > 1
+              ? 'Remove the row for the team he is no longer on.'
+              : 'Combine them into one row.',
+        });
+      }
+    }
+
+    // Only one team can hold a player's rights. Two teams both claiming them
+    // is the same mistake as two contracts, and neither row says which is
+    // right, so both are flagged.
+    if (rights.length > 1) {
+      const lines = rights.map((r) => r.lineNumber).join(', ');
+      const teams = new Set(rights.map((r) => r.team.trim().toUpperCase()));
+      for (const row of rights) {
+        add(row.lineNumber, {
+          field: 'player',
+          message:
+            teams.size > 1
+              ? `${rights[0].player.trim()} has his rights held by two teams (lines ${lines}). Only one team can hold them.`
+              : `${rights[0].player.trim()} has a cap hold on more than one row (lines ${lines}).`,
+          fix:
+            teams.size > 1
+              ? 'Remove the row for the team that no longer holds him.'
+              : 'Combine them into one row.',
         });
       }
     }

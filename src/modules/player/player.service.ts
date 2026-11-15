@@ -183,6 +183,51 @@ export class PlayerService {
    * The alias is global, like the player it points at. That is what makes it
    * worth storing, and also why the account that created it is kept.
    */
+  /**
+   * Creates a player the NBA feed has never heard of, from a name alone.
+   *
+   * A dynasty league holds people the API does not: a two-way signing it has
+   * not caught up with, an overseas prospect, a name spelled a way no alias
+   * covers. The import page offers this rather than making the commissioner
+   * delete the row, so the roster he actually has can be entered.
+   *
+   * There is no `bdlPlayerId`, which is what marks him as league-only. If the
+   * feed later carries him, the sync matches on the normalised name and fills
+   * the rest in.
+   */
+  async createFromName(input: string) {
+    const name = input.trim().replace(/\s+/g, ' ');
+    const nameNormalized = normalizePlayerName(name);
+    if (!name || !nameNormalized) {
+      throw new AppError(HttpStatus.BAD_REQUEST, 'That name is empty.');
+    }
+
+    // One name can normalise to the same string as a real player, and that is
+    // exactly the case the commissioner should resolve by picking him instead
+    // of creating a second row for the same person.
+    const clash = await this.prisma.player.findFirst({
+      where: { nameNormalized },
+      select: { id: true, name: true },
+    });
+    if (clash) {
+      throw new AppError(
+        HttpStatus.CONFLICT,
+        `${clash.name} is already in the player pool. Pick him instead of creating a new player.`,
+      );
+    }
+
+    const parts = name.split(' ');
+    const firstName = parts[0];
+    // Everything after the first word, so "Shai Gilgeous-Alexander" and
+    // "Juan Carlos Navarro" both keep their whole surname.
+    const lastName = parts.slice(1).join(' ') || parts[0];
+
+    return this.prisma.player.create({
+      data: { firstName, lastName, name, nameNormalized },
+      select: { id: true, name: true, nameNormalized: true },
+    });
+  }
+
   async rememberAlias(playerId: number, input: string, createdById?: number) {
     const aliasNormalized = normalizePlayerName(input);
     if (!aliasNormalized) {

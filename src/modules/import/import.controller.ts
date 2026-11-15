@@ -115,7 +115,7 @@ export class ImportController {
       leagueId,
       batchId,
       rowId,
-      payload.playerId,
+      { playerId: payload.playerId, createPlayer: payload.createPlayer },
       userId,
     );
 

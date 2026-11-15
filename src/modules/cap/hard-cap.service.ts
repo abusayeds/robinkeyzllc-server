@@ -204,12 +204,7 @@ export class HardCapService {
 
     const rookieMinimum = await this.rookieMinimum(cap);
 
-    const result = hardCapCheck(state, {
-      teamSalaryAfter: teamSalary,
-      rosterAfter: roster,
-      rosterMinimum: settings?.minRosterSize ?? 0,
-      rookieMinimum,
-    });
+    const result = hardCapCheck(state, { teamSalaryAfter: teamSalary });
 
     return {
       ...result,

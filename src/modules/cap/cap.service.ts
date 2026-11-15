@@ -36,6 +36,14 @@ export type EffectiveCap = {
   tradeExceptionAllowance: number;
   qualifyingOfferAddOn: number;
 
+  // Article 5 — Avora's own matching rule for a Taxpayer, the one place the
+  // league departs from the NBA bands.
+  taxpayerMatchPct: number;
+  taxpayerMatchAddOn: number;
+
+  /** Rule 5.9 — the aggregation wait, in months. */
+  aggregationWaitMonths: number;
+
   // Rule 10.12, as percentages of a prior salary.
   holds: {
     fullBirdAtOrAboveAvg: number;
@@ -137,6 +145,10 @@ export class CapService {
       tradeAllowance: rules.tradeAllowance,
       tradeExceptionAllowance: rules.tradeExceptionAllowance,
       qualifyingOfferAddOn: rules.qualifyingOfferAddOn,
+
+      taxpayerMatchPct: rules.taxpayerMatchPct,
+      taxpayerMatchAddOn: rules.taxpayerMatchAddOn,
+      aggregationWaitMonths: rules.aggregationWaitMonths,
 
       holds: {
         fullBirdAtOrAboveAvg: rules.holdFullBirdAtOrAboveAvgPct,

@@ -18,10 +18,16 @@ export const TIER = {
 
 export type Tier = (typeof TIER)[keyof typeof TIER];
 
+/**
+ * One set of names, used by every badge, validation line, cap summary and
+ * page in the app. The app previously mixed "At Tax", "Luxury Tax", "Over
+ * Cap, Below Tax", "1st Apron" and "First Apron" for overlapping things.
+ * "First" and "Second" are spelled out; never "1st"/"2nd".
+ */
 export const TIER_LABEL: Record<Tier, string> = {
-  belowCap: 'Below Cap',
-  overCap: 'Over Cap, Below Tax',
-  luxuryTax: 'Luxury Tax',
+  belowCap: 'Under the Cap',
+  overCap: 'Over the Cap',
+  luxuryTax: 'Taxpayer',
   firstApron: 'First Apron',
   secondApron: 'Second Apron',
   capNotSet: 'Cap not set',
@@ -41,52 +47,142 @@ export function tierFor(teamSalary: number, cap: EffectiveCap): Tier {
   return TIER.belowCap;
 }
 
+const money = (value: number) =>
+  `$${Math.round(value).toLocaleString('en-US')}`;
+
+export type MaxIncoming = {
+  limit: number;
+  /** The rule that decided the limit, named the way the rule book names it. */
+  ruleName: string;
+  /** The arithmetic behind the limit, on one line, so anyone can check it. */
+  formula: string;
+  /**
+   * True when the limit came from cap room rather than from matching. Rule
+   * 5.6 absorption buys no hard cap, so Article 4 has to know.
+   */
+  usedCapRoom: boolean;
+};
+
+export type MaxIncomingInput = {
+  outgoing: number;
+  /** Rule 3.4 — the tier the team lands in. */
+  tierAfter: Tier;
+  cap: EffectiveCap;
+  /** Cap space the team had **before** the trade, which may be negative. */
+  capRoomBefore: number;
+  /**
+   * Whether the team was under the cap **before** the trade. The cap-room
+   * rule is keyed on that, not on where the team ends up: a team that absorbs
+   * salary into its room usually finishes over the cap, and reading the
+   * post-trade tier would send it to the bands instead.
+   */
+  wasBelowCapBefore: boolean;
+};
+
 /**
  * Article 5 — the maximum salary a team may take back in a trade.
  *
- * The rule book gives the formula outright:
+ * Four rules, in the order the rule book tests them:
  *
- *   max_incoming = max( min(2.00 × out + allowance, out + cushion),
- *                       1.25 × out + allowance )
+ *   under the cap before the trade  →  cap room + allowance, or the bands if
+ *                                      they are larger
+ *   over the cap, under the tax     →  the NBA bands
+ *   over the tax, under the apron   →  Avora's 110% + $100,000
+ *   above either apron              →  100% of outgoing salary
  *
- * which produces the three published bands without storing their edges —
- * only the cushion is stored. It applies to every team below the First
- * Apron. At or above either apron the limit is 100% of outgoing salary
- * (Rules 5.3 and the tier table).
+ * Every maximum is rounded **down**: a limit that rounds up lets a trade
+ * through by the fraction of a dollar it rounded away.
  */
-export function maxIncomingSalary(
-  outgoing: number,
-  tier: Tier,
-  cap: EffectiveCap,
-  capRoom: number,
-): { limit: number; basis: string } {
-  if (tier === TIER.firstApron || tier === TIER.secondApron) {
-    return { limit: outgoing, basis: '100% of outgoing salary' };
-  }
+export function maxIncomingSalary(input: MaxIncomingInput): MaxIncoming {
+  const { outgoing, tierAfter, cap, capRoomBefore, wasBelowCapBefore } = input;
 
   const bands = bandLimit(outgoing, cap);
 
-  if (tier === TIER.belowCap) {
-    // Rule 5.6 — a team below the cap may absorb up to its room plus the
-    // trade allowance without matching at all, and Rule 5.3's table says it
-    // takes whichever of the two is greater.
-    const room = Math.max(0, capRoom) + cap.tradeAllowance;
-    return room >= bands
-      ? { limit: room, basis: 'cap room plus the trade allowance' }
-      : { limit: bands, basis: 'the salary-matching bands' };
+  // Rule 5.6 — a team under the cap may absorb up to its room plus the trade
+  // allowance without matching at all, and Rule 5.3's table says it takes
+  // whichever of that and the bands is greater.
+  if (wasBelowCapBefore) {
+    const room = Math.max(0, capRoomBefore);
+    const absorb = Math.floor(room + cap.tradeAllowance);
+    if (absorb >= bands.limit) {
+      return {
+        limit: absorb,
+        ruleName: 'Cap room rule',
+        formula: `${money(room)} room + ${money(cap.tradeAllowance)} = ${money(absorb)}`,
+        usedCapRoom: true,
+      };
+    }
+    return { ...bands, usedCapRoom: false };
   }
 
-  return { limit: bands, basis: 'the salary-matching bands' };
+  if (tierAfter === TIER.firstApron || tierAfter === TIER.secondApron) {
+    const limit = Math.floor(outgoing);
+    return {
+      limit,
+      ruleName: `${TIER_LABEL[tierAfter]} rule`,
+      formula: `up to 100% of what they send, ${money(limit)}`,
+      usedCapRoom: false,
+    };
+  }
+
+  // Avora's own rule. The NBA would give a Taxpayer the bands, which allow
+  // far more salary; this is the single place the two rule books differ.
+  if (tierAfter === TIER.luxuryTax) {
+    const limit = Math.floor(
+      (outgoing * cap.taxpayerMatchPct) / 100 + cap.taxpayerMatchAddOn,
+    );
+    return {
+      limit,
+      ruleName: 'Taxpayer rule',
+      formula: `${cap.taxpayerMatchPct}% of ${money(outgoing)} + ${money(cap.taxpayerMatchAddOn)} = ${money(limit)}`,
+      usedCapRoom: false,
+    };
+  }
+
+  return { ...bands, usedCapRoom: false };
 }
 
-/** The band formula on its own, for a team that has to match. */
-export function bandLimit(outgoing: number, cap: EffectiveCap): number {
+/**
+ * The band formula on its own, for a team that has to match:
+ *
+ *   max( min(2.00 × out + allowance, out + cushion), 1.25 × out + allowance )
+ *
+ * which produces the three published bands without storing their edges — only
+ * the cushion is stored. The winning term is named so the validation line can
+ * show the arithmetic that actually applied.
+ */
+export function bandLimit(
+  outgoing: number,
+  cap: EffectiveCap,
+): { limit: number; ruleName: string; formula: string } {
   const allowance = cap.tradeAllowance;
   const doubled = 2 * outgoing + allowance;
   const cushioned = outgoing + cap.bandCushion;
   const quarter = 1.25 * outgoing + allowance;
 
-  return Math.round(Math.max(Math.min(doubled, cushioned), quarter));
+  const chosen = Math.max(Math.min(doubled, cushioned), quarter);
+  const limit = Math.floor(chosen);
+  const ruleName = 'Over-the-Cap rule';
+
+  if (chosen === quarter) {
+    return {
+      limit,
+      ruleName,
+      formula: `125% of ${money(outgoing)} + ${money(allowance)} = ${money(limit)}`,
+    };
+  }
+  if (chosen === cushioned) {
+    return {
+      limit,
+      ruleName,
+      formula: `${money(outgoing)} + ${money(cap.bandCushion)} = ${money(limit)}`,
+    };
+  }
+  return {
+    limit,
+    ruleName,
+    formula: `200% of ${money(outgoing)} + ${money(allowance)} = ${money(limit)}`,
+  };
 }
 
 /**

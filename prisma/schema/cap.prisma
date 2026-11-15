@@ -51,6 +51,17 @@ model CapRuleSet {
   tradeExceptionAllowance Int @default(250000)
   qualifyingOfferAddOn    Int @default(200000)
 
+  // Article 5 — Avora's own matching rule for a team over the tax and under
+  // the First Apron. This is the one place Avora departs from the NBA, which
+  // would give those teams the much larger salary bands, so it is stored
+  // rather than written into the engine.
+  taxpayerMatchPct   Float @default(110)
+  taxpayerMatchAddOn Int   @default(100000)
+
+  // Rule 5.9 — how long a traded-for player cannot be aggregated with another
+  // salary, counted from the date his trade was processed.
+  aggregationWaitMonths Int @default(2)
+
   // Rule 10.12 cap holds, as a percentage of the player's prior salary.
   holdFullBirdAtOrAboveAvgPct Float @default(150)
   holdFullBirdBelowAvgPct     Float @default(190)

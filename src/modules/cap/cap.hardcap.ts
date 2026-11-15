@@ -97,22 +97,13 @@ export type HardCapState = {
 export type ReserveInput = {
   /** Team Salary once the move is done (Rule 3.4). */
   teamSalaryAfter: number;
-  /** Players on the roster once the move is done. Two-way players excluded. */
-  rosterAfter: number;
-  /** The league's roster minimum, from commissioner settings. */
-  rosterMinimum: number;
-  /** The 0-years-of-service minimum salary, which fills an open spot. */
-  rookieMinimum: number;
 };
 
 export type HardCapResult = {
   /** Null when no ceiling applies, which is most teams most of the time. */
   apron: HardCapApron | null;
   ceiling: number | null;
-  /** Rule 4.8 — spots still to fill before the league's roster minimum. */
-  openSpots: number;
-  reserve: number;
-  /** Team Salary after the move, plus the reserve. */
+  /** Team Salary after the move. */
   committed: number;
   room: number | null;
   pass: boolean;
@@ -125,29 +116,23 @@ const money = (value: number) =>
   `$${Math.round(value).toLocaleString('en-US')}`;
 
 /**
- * Rule 4.8 — the roster reserve check.
+ * Article 4 — is this team still under its ceiling once the move is done?
  *
- * A hard-capped team cannot exceed its apron even to sign a minimum contract,
- * so the engine makes sure it can still fill its roster to the league minimum
- * before it lets the team spend. The reserve is counted on every move by a
- * hard-capped team, not only on the one that created the cap.
+ * Measured on Team Salary alone. An earlier version also reserved a minimum
+ * contract for every unfilled roster spot and charged it against the apron,
+ * which is not part of the V1 rules and showed up on screen as an unexplained
+ * deduction, so it was removed.
  */
 export function hardCapCheck(
   state: HardCapState | null,
   input: ReserveInput,
 ): HardCapResult {
-  // Only spots below the minimum are reserved. A full roster reserves nothing,
-  // and a team over the minimum does not get a refund.
-  const openSpots = Math.max(0, input.rosterMinimum - input.rosterAfter);
-  const reserve = openSpots * input.rookieMinimum;
-  const committed = input.teamSalaryAfter + reserve;
+  const committed = input.teamSalaryAfter;
 
   if (!state) {
     return {
       apron: null,
       ceiling: null,
-      openSpots,
-      reserve,
       committed,
       room: null,
       pass: true,
@@ -162,21 +147,13 @@ export function hardCapCheck(
   return {
     apron: state.apron,
     ceiling: state.amount,
-    openSpots,
-    reserve,
     committed,
     room,
     pass,
     shortfall: pass ? 0 : -room,
     message: pass
-      ? openSpots > 0
-        ? `${money(room)} under the ${APRON_LABEL[state.apron]}, after reserving ${money(reserve)} for ${openSpots} open roster spot${openSpots === 1 ? '' : 's'}.`
-        : `${money(room)} under the ${APRON_LABEL[state.apron]}.`
-      : `${money(-room)} over the ${APRON_LABEL[state.apron]}${
-          reserve > 0
-            ? `, counting ${money(reserve)} reserved for ${openSpots} open roster spot${openSpots === 1 ? '' : 's'}`
-            : ''
-        }. That much salary has to be cleared.`,
+      ? `${money(room)} under the ${APRON_LABEL[state.apron]}.`
+      : `${money(-room)} over the ${APRON_LABEL[state.apron]}. That much salary has to be cleared.`,
   };
 }
 

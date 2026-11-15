@@ -6,12 +6,15 @@ import {
   GuaranteeType,
   LeaguePlayerStatus,
   LeagueRole,
+  NewsItemSource,
+  NewsItemType,
   SignedVia,
 } from '@prisma/client';
 import { AppError } from '../../common/errors/appError';
 import { PrismaService } from '../../prisma/prisma.service';
 import { parseSeasonLabel } from '../../utils/season';
 import { CapService } from '../cap/cap.service';
+import { NewsPublisher } from '../news/news.publisher';
 import { birdRightsOf } from '../free-agency/free-agency.rules';
 import {
   extensionLimits,
@@ -41,6 +44,7 @@ export class ExtensionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly capService: CapService,
+    private readonly news: NewsPublisher,
   ) {}
 
   /** The limits the offer screen draws, with the reason it cannot be offered. */
@@ -148,6 +152,38 @@ export class ExtensionService {
         },
       },
     });
+
+    // League News. Written after the contract rather than inside a
+    // transaction because the create above is a single statement: there is no
+    // half-written extension for a post to describe.
+    const team = await this.prisma.team.findUnique({
+      where: { id: teamId },
+      select: { id: true, name: true, abbr: true, logo: true },
+    });
+    if (team) {
+      await this.news.publishPlayerMove(this.prisma, {
+        leagueId,
+        type: NewsItemType.extension,
+        sourceType: NewsItemSource.contract,
+        sourceId: contract.id,
+        team: {
+          teamId: team.id,
+          name: team.name,
+          abbr: team.abbr,
+          logo: team.logo,
+          capBefore: null,
+          capAfter: null,
+          salaryCap: null,
+        },
+        player: {
+          name: state.playerName,
+          position: null,
+          salary: sorted[0].salary,
+          throughSeasonStartYear: contract.endSeasonStartYear,
+        },
+        summary: `${sorted.length} ${sorted.length === 1 ? 'year' : 'years'}, ${contract.startSeasonStartYear} through ${contract.endSeasonStartYear}.`,
+      });
+    }
 
     return {
       playerName: state.playerName,

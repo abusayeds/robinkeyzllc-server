@@ -1,15 +1,21 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import {
+  ContractSource,
+  ContractType,
   DraftKind,
   DraftStatus,
   LeaguePlayerStatus,
+  NewsItemSource,
+  NewsItemType,
   Prisma,
   RosterSlotType,
+  SignedVia,
 } from '@prisma/client';
 import { AppError } from '../../common/errors/appError';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CapService } from '../cap/cap.service';
 import { PlayerStatsService } from '../nba/player-stats.service';
+import { NewsPublisher } from '../news/news.publisher';
 
 /**
  * The live draft room: making a pick, the clock, and auto-pick when it runs
@@ -55,6 +61,7 @@ export class DraftLiveService {
     private readonly prisma: PrismaService,
     private readonly capService: CapService,
     private readonly playerStats: PlayerStatsService,
+    private readonly news: NewsPublisher,
   ) {}
 
   /**
@@ -517,7 +524,13 @@ export class DraftLiveService {
 
     const player = await this.prisma.player.findUnique({
       where: { id: playerId },
-      select: { id: true, name: true, isActive: true, draftYear: true },
+      select: {
+        id: true,
+        name: true,
+        isActive: true,
+        draftYear: true,
+        position: true,
+      },
     });
     if (!player) {
       throw new AppError(HttpStatus.NOT_FOUND, 'Player not found.');
@@ -578,6 +591,20 @@ export class DraftLiveService {
         );
       }
     }
+
+    // A startup pick is a roster move, so the player arrives on the contract
+    // he really has. That comes from the global contract database rather than
+    // from balldontlie, which publishes no contract endpoint. Nothing there
+    // for him means he joins with no contract and the commissioner sets one.
+    const reference = isRookie
+      ? null
+      : await this.prisma.playerContractReference.findMany({
+          where: {
+            playerId,
+            seasonStartYear: { gte: draft.seasonStartYear },
+          },
+          orderBy: { seasonStartYear: 'asc' },
+        });
 
     // Rule 11.9 — the hold is the slot's Year 1 scale salary, and the scale
     // only covers the thirty first-round slots. Read before the transaction
@@ -640,6 +667,34 @@ export class DraftLiveService {
         select: { id: true },
       });
 
+      // The contract he really has, written as the league's own so the cap
+      // sheet, trades and extensions all read it the same way as an imported
+      // one. `source` says it came from the global database.
+      if (reference && reference.length > 0) {
+        await tx.contract.create({
+          data: {
+            leagueId: draft.leagueId,
+            leaguePlayerId: leaguePlayer.id,
+            teamId: slot.teamId,
+            contractType: ContractType.standard,
+            signedVia: SignedVia.capSpace,
+            source: ContractSource.import,
+            startSeasonStartYear: reference[0].seasonStartYear,
+            endSeasonStartYear: reference[reference.length - 1].seasonStartYear,
+            years: {
+              create: reference.map((year) => ({
+                seasonStartYear: year.seasonStartYear,
+                salary: year.salary,
+                capHit: year.salary,
+                optionType: year.optionType,
+                guaranteeType: year.guaranteeType,
+                guaranteedAmount: year.guaranteedAmount,
+              })),
+            },
+          },
+        });
+      }
+
       if (holdAmount !== null) {
         await tx.capHold.upsert({
           where: {
@@ -665,6 +720,39 @@ export class DraftLiveService {
         await tx.draftPick.update({
           where: { id: slot.draftPickId },
           data: { usedAt: new Date() },
+        });
+      }
+
+      // League News. The selection is the post, so it is written here rather
+      // than when the rookie's contract is signed later.
+      const team = await tx.team.findUnique({
+        where: { id: slot.teamId },
+        select: { id: true, name: true, abbr: true, logo: true },
+      });
+      if (team) {
+        await this.news.publishPlayerMove(tx, {
+          leagueId: draft.leagueId,
+          type: NewsItemType.draftPick,
+          sourceType: NewsItemSource.draftSlot,
+          sourceId: slot.id,
+          team: {
+            teamId: team.id,
+            name: team.name,
+            abbr: team.abbr,
+            logo: team.logo,
+            capBefore: null,
+            capAfter: null,
+            salaryCap: null,
+          },
+          player: {
+            name: player.name,
+            position: player.position ?? null,
+            salary: holdAmount,
+            throughSeasonStartYear: null,
+          },
+          // The headline reads "… select X at No. 4", so the summary carries
+          // the pick itself.
+          summary: `Round ${slot.round}, pick ${slot.pickInRound}`,
         });
       }
 

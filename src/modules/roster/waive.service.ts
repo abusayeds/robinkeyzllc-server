@@ -4,11 +4,14 @@ import {
   GuaranteeType,
   LeaguePlayerStatus,
   LeagueRole,
+  NewsItemSource,
+  NewsItemType,
 } from '@prisma/client';
 import { AppError } from '../../common/errors/appError';
 import { PrismaService } from '../../prisma/prisma.service';
 import { parseSeasonLabel } from '../../utils/season';
 import { CapService } from '../cap/cap.service';
+import { NewsPublisher } from '../news/news.publisher';
 
 /**
  * Rules 10.14 and 10.15 — waiving a player, and what it leaves behind.
@@ -54,6 +57,7 @@ export class WaiveService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly capService: CapService,
+    private readonly news: NewsPublisher,
   ) {}
 
   /**
@@ -164,7 +168,7 @@ export class WaiveService {
       // The release itself, written whether or not it cost anything. A player
       // with nothing guaranteed produces no `DeadMoney` row at all, and
       // without this the move would leave no trace in the transaction feed.
-      await tx.waiver.create({
+      const waiver = await tx.waiver.create({
         data: {
           leagueId,
           teamId,
@@ -174,6 +178,38 @@ export class WaiveService {
           isStretched: stretch,
           seasonsOwed: owedSeasons,
         },
+        select: {
+          id: true,
+          team: { select: { id: true, name: true, abbr: true, logo: true } },
+        },
+      });
+
+      await this.news.publishPlayerMove(tx, {
+        leagueId,
+        type: NewsItemType.waiver,
+        sourceType: NewsItemSource.waiver,
+        sourceId: waiver.id,
+        team: {
+          teamId: waiver.team.id,
+          name: waiver.team.name,
+          abbr: waiver.team.abbr,
+          logo: waiver.team.logo,
+          capBefore: null,
+          capAfter: null,
+          salaryCap: null,
+        },
+        player: {
+          name: plan.playerName,
+          position: null,
+          // What he costs the team now is the dead money, not the salary he
+          // was on: the contract is over.
+          salary: owedTotal > 0 ? owedTotal : null,
+          throughSeasonStartYear: null,
+        },
+        summary:
+          owedTotal > 0
+            ? `${stretch ? 'Stretched over' : 'Dead money across'} ${owedSeasons} ${owedSeasons === 1 ? 'season' : 'seasons'}.`
+            : 'Nothing was guaranteed, so no dead money is carried.',
       });
     });
 

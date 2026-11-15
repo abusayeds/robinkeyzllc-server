@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DraftKind, FreeAgencyOfferStatus, TradeStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { pickLabel, roundLabel } from '../draft/draft.rules';
 
 /**
  * The league's transaction feed.
@@ -38,9 +39,6 @@ export type TransactionItem = {
 
 const money = (value: number) =>
   `$${Math.round(value).toLocaleString('en-US')}`;
-
-const roundLabel = (round: number) =>
-  round === 1 ? '1st round' : round === 2 ? '2nd round' : `round ${round}`;
 
 @Injectable()
 export class TransactionsService {
@@ -165,9 +163,11 @@ export class TransactionsService {
         .filter(Boolean);
       const picks = trade.assets
         .filter((asset) => asset.draftPick)
-        .map(
-          (asset) =>
-            `${asset.draftPick?.seasonStartYear} ${roundLabel(asset.draftPick?.round ?? 1)}`,
+        .map((asset) =>
+          pickLabel(
+            asset.draftPick?.seasonStartYear ?? 0,
+            asset.draftPick?.round ?? 1,
+          ),
         );
 
       const parts: string[] = [];
@@ -266,7 +266,7 @@ export class TransactionsService {
           : event.toTeam.name,
         description:
           event.reason ??
-          `${event.pick.seasonStartYear} ${roundLabel(event.pick.round)} pick`,
+          pickLabel(event.pick.seasonStartYear, event.pick.round),
         date: event.createdAt.toISOString(),
         at: event.createdAt,
         mine: mine !== null && teamIds.includes(mine),

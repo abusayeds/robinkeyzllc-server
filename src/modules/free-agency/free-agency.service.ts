@@ -6,6 +6,8 @@ import {
   FreeAgencyOfferStatus,
   GuaranteeType,
   LeaguePlayerStatus,
+  NewsItemSource,
+  NewsItemType,
   Prisma,
   RosterSlotType,
   SignedVia,
@@ -14,6 +16,7 @@ import { AppError } from '../../common/errors/appError';
 import { PrismaService } from '../../prisma/prisma.service';
 import { parseSeasonLabel } from '../../utils/season';
 import { CapService } from '../cap/cap.service';
+import { NewsPublisher } from '../news/news.publisher';
 import { SubmitOfferDto } from './dto/submit-offer.dto';
 import {
   birdRightsOf,
@@ -157,6 +160,7 @@ export class FreeAgencyService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly capService: CapService,
+    private readonly news: NewsPublisher,
   ) {}
 
   async list(leagueId: number, status?: FreeAgencyOfferStatus) {
@@ -410,6 +414,34 @@ export class FreeAgencyService {
           status: FreeAgencyOfferStatus.declined,
           respondedAt: new Date(),
         },
+      });
+
+      // League News, in the same transaction: a signing that rolls back must
+      // not leave a post announcing it.
+      await this.news.publishPlayerMove(tx, {
+        leagueId,
+        type: NewsItemType.signing,
+        sourceType: NewsItemSource.freeAgencyOffer,
+        sourceId: offer.id,
+        team: {
+          teamId: offer.team.id,
+          name: offer.team.name,
+          abbr: offer.team.abbr,
+          logo: offer.team.logo,
+          // The payroll either side of a signing is not read here, so the
+          // card hides that section rather than printing zeros.
+          capBefore: null,
+          capAfter: null,
+          salaryCap: null,
+        },
+        player: {
+          name: offer.leaguePlayer.player.name,
+          position: offer.leaguePlayer.player.position,
+          salary: isTwoWay ? 0 : offer.firstYearSalary,
+          throughSeasonStartYear:
+            seasons[seasons.length - 1]?.seasonStartYear ?? null,
+        },
+        summary: `${offer.years} ${offer.years === 1 ? 'year' : 'years'}, signed via ${offer.signedVia}.`,
       });
     });
 

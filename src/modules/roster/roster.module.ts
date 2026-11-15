@@ -3,8 +3,10 @@ import { RosterController } from './roster.controller';
 import { RosterService } from './roster.service';
 import { ExtensionService } from './extension.service';
 import { WaiveService } from './waive.service';
+import { NewsModule } from '../news/news.module';
 
 @Module({
+  imports: [NewsModule],
   controllers: [RosterController],
   providers: [RosterService, WaiveService, ExtensionService],
   exports: [RosterService, WaiveService, ExtensionService],

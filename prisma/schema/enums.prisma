@@ -230,6 +230,8 @@ enum SyncJob {
   stats
   // Current injuries, from /v1/player_injuries.
   injuries
+  // A season's averages, from /v1/season_averages.
+  seasonAverages
 }
 
 enum SyncStatus {
@@ -297,4 +299,32 @@ enum PlayoffRound {
   semifinal
   conferenceFinal
   championship
+}
+
+// The transaction a League News post is about.
+enum NewsItemType {
+  trade
+  signing
+  extension
+  waiver
+  claim
+  offerSheet
+  draftPick
+  veto
+}
+
+// Reserved for later: every post is standard for now.
+enum NewsItemTier {
+  standard
+  blockbuster
+}
+
+// Which table a news item was built from, so nothing is posted twice.
+enum NewsItemSource {
+  trade
+  freeAgencyOffer
+  waiver
+  draftSlot
+  draftPickEvent
+  contract
 }

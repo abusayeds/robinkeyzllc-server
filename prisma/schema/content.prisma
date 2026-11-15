@@ -16,3 +16,39 @@ model LeagueContent {
   @@unique([leagueId, type])
   @@index([updatedById])
 }
+
+// One post on the League News page, for every transaction the league makes.
+//
+// Stored rather than derived: a commissioner may override the headline, and
+// the cap figures either side of a move are only true at the moment it
+// happened. Reading them live would make an old post show today's payroll.
+model LeagueNewsItem {
+  id       Int @id @default(autoincrement())
+  leagueId Int
+
+  type NewsItemType
+  // Not shown yet. It is here so a tier like "Blockbuster" can be added later
+  // without a schema change.
+  tier NewsItemTier @default(standard)
+
+  // Built from the data when the item is written. The commissioner's own
+  // headline wins over it when one is set.
+  autoHeadline   String
+  customHeadline String?
+
+  // What each team received, the contract terms, and payroll before and after
+  // per team — everything the template needs to lay itself out.
+  payload Json
+
+  // What produced it. The pair is unique so a move reprocessed, or an
+  // approval retried, cannot post the same news twice.
+  sourceType NewsItemSource
+  sourceId   Int
+
+  createdAt DateTime @default(now())
+
+  league League @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+
+  @@unique([leagueId, sourceType, sourceId])
+  @@index([leagueId, createdAt])
+}

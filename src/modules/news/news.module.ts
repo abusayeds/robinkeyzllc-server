@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { NewsController } from './news.controller';
+import { NewsPublisher } from './news.publisher';
 import { NewsService } from './news.service';
 import { TransactionsModule } from '../transactions/transactions.module';
 
@@ -8,7 +9,7 @@ import { TransactionsModule } from '../transactions/transactions.module';
   // already describes. Reading it keeps one wording per event.
   imports: [TransactionsModule],
   controllers: [NewsController],
-  providers: [NewsService],
-  exports: [NewsService],
+  providers: [NewsService, NewsPublisher],
+  exports: [NewsService, NewsPublisher],
 })
 export class NewsModule {}

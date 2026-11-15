@@ -1,8 +1,13 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
-import { LeaguePlayerStatus, NotificationType } from '@prisma/client';
+import {
+  LeaguePlayerStatus,
+  NewsItemTier,
+  NewsItemType,
+  NotificationType,
+} from '@prisma/client';
 import { AppError } from '../../common/errors/appError';
 import { PrismaService } from '../../prisma/prisma.service';
-import { TransactionsService } from '../transactions/transactions.service';
+import { excerptOf, type NewsPayload } from './news.breaking';
 
 /**
  * The league's news feed.
@@ -41,6 +46,29 @@ export type NewsArticle = {
   players: string[];
   /** Worth a coloured bar: an injury, or a date that is running now. */
   alert: boolean;
+  /**
+   * Set on a transaction post, which carries the Breaking News label and a
+   * laid-out detail. An injury or a calendar date has none: those are not
+   * transactions and nothing moved.
+   */
+  breaking: {
+    itemId: number;
+    type: NewsItemType;
+    tier: NewsItemTier;
+    payload: NewsPayload;
+  } | null;
+};
+
+/** Which heading on the page a transaction post belongs under. */
+const CATEGORY_OF: Record<NewsItemType, NewsCategory> = {
+  trade: 'Trade',
+  veto: 'Trade',
+  signing: 'Signing',
+  extension: 'Signing',
+  offerSheet: 'Signing',
+  waiver: 'Waiver',
+  claim: 'Waiver',
+  draftPick: 'Draft',
 };
 
 const LIMIT = 40;
@@ -50,10 +78,84 @@ const SERIOUS = ['out', 'out for season'];
 
 @Injectable()
 export class NewsService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly transactionsService: TransactionsService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * One post, with its neighbours.
+   *
+   * Prev and next come back with it so the detail page can offer them without
+   * loading the whole feed to work out where it sits.
+   */
+  async item(leagueId: number, itemId: number) {
+    const post = await this.prisma.leagueNewsItem.findFirst({
+      where: { id: itemId, leagueId },
+    });
+    if (!post) {
+      throw new AppError(HttpStatus.NOT_FOUND, 'That news item was not found.');
+    }
+
+    const [previous, next] = await Promise.all([
+      this.prisma.leagueNewsItem.findFirst({
+        where: { leagueId, createdAt: { lt: post.createdAt } },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, autoHeadline: true, customHeadline: true },
+      }),
+      this.prisma.leagueNewsItem.findFirst({
+        where: { leagueId, createdAt: { gt: post.createdAt } },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, autoHeadline: true, customHeadline: true },
+      }),
+    ]);
+
+    const payload = post.payload as unknown as NewsPayload;
+    const neighbour = (
+      row: {
+        id: number;
+        autoHeadline: string;
+        customHeadline: string | null;
+      } | null,
+    ) =>
+      row
+        ? { id: row.id, headline: row.customHeadline ?? row.autoHeadline }
+        : null;
+
+    return {
+      id: post.id,
+      type: post.type,
+      tier: post.tier,
+      headline: post.customHeadline ?? post.autoHeadline,
+      autoHeadline: post.autoHeadline,
+      customHeadline: post.customHeadline,
+      category: CATEGORY_OF[post.type],
+      excerpt: excerptOf(post.type, payload),
+      payload,
+      createdAt: post.createdAt.toISOString(),
+      previous: neighbour(previous),
+      next: neighbour(next),
+    };
+  }
+
+  /**
+   * Rule-free editorial control: a commissioner may replace a generated
+   * headline. Clearing it falls back to the generated one rather than leaving
+   * the post untitled.
+   */
+  async setHeadline(leagueId: number, itemId: number, headline: string | null) {
+    const post = await this.prisma.leagueNewsItem.findFirst({
+      where: { id: itemId, leagueId },
+      select: { id: true },
+    });
+    if (!post) {
+      throw new AppError(HttpStatus.NOT_FOUND, 'That news item was not found.');
+    }
+
+    await this.prisma.leagueNewsItem.update({
+      where: { id: post.id },
+      data: { customHeadline: headline?.trim() || null },
+    });
+
+    return this.item(leagueId, itemId);
+  }
 
   async feed(leagueId: number, userId: number) {
     const league = await this.prisma.league.findFirst({
@@ -69,9 +171,14 @@ export class NewsService {
       select: { teamId: true },
     });
 
-    const [moves, injuries, announcements, dates] = await Promise.all([
-      this.transactionsService.feed(leagueId, {
-        teamId: membership?.teamId ?? null,
+    const [posts, injuries, announcements, dates] = await Promise.all([
+      // Transactions now write their own post when they happen, with the cap
+      // figures as they were at the time. The transactions feed is no longer
+      // read for them: it describes a move in one line and cannot say which
+      // team got whom.
+      this.prisma.leagueNewsItem.findMany({
+        where: { leagueId },
+        orderBy: { createdAt: 'desc' },
         take: LIMIT,
       }),
       // Only players this league rosters. An injury to somebody nobody owns is
@@ -139,28 +246,29 @@ export class NewsService {
 
     const items: NewsArticle[] = [];
 
-    for (const move of moves) {
-      // The four move categories the screen names, from the one it carries.
-      const category: NewsCategory =
-        move.type === 'Player Waived'
-          ? 'Waiver'
-          : move.type === 'Draft Pick Traded'
-            ? 'Draft'
-            : move.category === 'Signings'
-              ? 'Signing'
-              : 'Trade';
-
+    for (const post of posts) {
+      const payload = post.payload as unknown as NewsPayload;
       items.push({
-        id: `move-${move.id}`,
-        category,
-        headline: move.teams ? `${move.type} — ${move.teams}` : move.type,
-        excerpt: move.description,
-        body: move.description,
-        timestamp: move.date,
-        tags: [category],
-        teams: move.teams ? move.teams.split(/ ↔ | → /) : [],
-        players: [],
+        id: `news-${post.id}`,
+        category: CATEGORY_OF[post.type],
+        // The commissioner's own headline wins; otherwise the one built from
+        // the data when the post was written.
+        headline: post.customHeadline ?? post.autoHeadline,
+        excerpt: excerptOf(post.type, payload),
+        body: excerptOf(post.type, payload),
+        timestamp: post.createdAt.toISOString(),
+        tags: [CATEGORY_OF[post.type]],
+        teams: payload.teams.map((team) => team.name),
+        players: payload.teams.flatMap((team) =>
+          team.players.map((player) => player.name),
+        ),
         alert: false,
+        breaking: {
+          itemId: post.id,
+          type: post.type,
+          tier: post.tier,
+          payload,
+        },
       });
     }
 
@@ -181,6 +289,7 @@ export class NewsService {
         teams: team ? [team] : [],
         players: [injury.player.name],
         alert: SERIOUS.includes(injury.status.toLowerCase()),
+        breaking: null,
       });
     }
 
@@ -196,6 +305,7 @@ export class NewsService {
         teams: [],
         players: [],
         alert: false,
+        breaking: null,
       });
     }
 
@@ -218,6 +328,7 @@ export class NewsService {
         teams: [],
         players: [],
         alert: event.startDate <= today && end >= today,
+        breaking: null,
       });
     }
 

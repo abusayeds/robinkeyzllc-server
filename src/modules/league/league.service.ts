@@ -265,7 +265,31 @@ export class LeagueService {
       );
     }
 
-    const data: Prisma.LeagueSettingsUpdateInput = { ...payload };
+    // Article 2 — CapService reads useCustomCapNumbers + customSalaryCap, not
+    // the legacy salaryCap column alone. A commissioner typing a figure on
+    // Salary Cap Settings must land in those fields or every roster/FA/trade
+    // page keeps showing the Super Admin CapYear (or zero) forever.
+    const { salaryCap, ...rest } = payload;
+    const data: Prisma.LeagueSettingsUpdateInput = { ...rest };
+
+    if (salaryCap !== undefined) {
+      data.salaryCap = salaryCap;
+      if (salaryCap > 0) {
+        data.useCustomCapNumbers = true;
+        data.customSalaryCap = salaryCap;
+        // Drop any stale tax/apron overrides so CapService re-derives them
+        // from this league's own cap (Rule 2.6).
+        data.customLuxuryTax = null;
+        data.customFirstApron = null;
+        data.customSecondApron = null;
+      } else {
+        data.useCustomCapNumbers = false;
+        data.customSalaryCap = null;
+        data.customLuxuryTax = null;
+        data.customFirstApron = null;
+        data.customSecondApron = null;
+      }
+    }
 
     if (!Object.keys(data).length) {
       throw new AppError(HttpStatus.BAD_REQUEST, 'Nothing to update.');
@@ -426,30 +450,24 @@ export class LeagueService {
     );
   }
 
-  private async capThresholds(
-    leagueId: number,
-    seasonStartYear: number,
-  ): Promise<TCapThresholds> {
-    const cap = await this.capService.forLeague(leagueId, seasonStartYear);
-    return {
-      salaryFloor: cap.salaryFloor,
-      luxuryTax: cap.luxuryTax,
-      firstApron: cap.firstApron,
-      secondApron: cap.secondApron,
-      // Rule 10.2 — the real maximum depends on years of service. This is the
-      // highest of the three, which is what a cap page shows as the ceiling.
-      maxPlayerSalary: cap.maxSalary10Plus,
-    };
-  }
-
   private async toSettingsPayload(
     settings: Prisma.LeagueSettingsGetPayload<object>,
     seasonStartYear: number,
   ) {
-    const thresholds = await this.capThresholds(
+    // Article 2 — the effective figures for this league year (CapYear default
+    // or this league's custom set). The legacy salaryCap column is 0 on every
+    // league that has never entered a custom figure, which blanked Cap Space.
+    const cap = await this.capService.forLeague(
       settings.leagueId,
       seasonStartYear,
     );
+    const thresholds: TCapThresholds = {
+      salaryFloor: cap.salaryFloor,
+      luxuryTax: cap.luxuryTax,
+      firstApron: cap.firstApron,
+      secondApron: cap.secondApron,
+      maxPlayerSalary: cap.maxSalary10Plus,
+    };
 
     return {
       leagueId: settings.leagueId,
@@ -465,7 +483,7 @@ export class LeagueService {
         pickTradingWindowDrafts: settings.pickTradingWindowDrafts,
         commissionerTradeApproval: settings.commissionerTradeApproval,
       },
-      salaryCap: settings.salaryCap,
+      salaryCap: cap.salaryCap,
       minPlayerSalary: settings.minPlayerSalary,
       hardCapEnabled: settings.hardCapEnabled,
       hardCapThreshold: settings.hardCapThreshold,

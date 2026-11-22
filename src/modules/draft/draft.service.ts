@@ -526,6 +526,27 @@ export class DraftService {
         )
       : new Map<number, SeasonAverage>();
 
+    // Startup pool salaries come from the Super Admin's global contract
+    // reference table — balldontlie has no contract endpoint. Rookie drafts
+    // do not show a current deal here.
+    const references =
+      kind === DraftKind.startup && players.length > 0
+        ? await this.prisma.playerContractReference.findMany({
+            where: {
+              playerId: { in: players.map((player) => player.id) },
+              seasonStartYear: { gte: draft.seasonStartYear },
+            },
+            orderBy: { seasonStartYear: 'asc' },
+          })
+        : [];
+
+    const contractsByPlayer = new Map<number, typeof references>();
+    for (const row of references) {
+      const list = contractsByPlayer.get(row.playerId) ?? [];
+      list.push(row);
+      contractsByPlayer.set(row.playerId, list);
+    }
+
     return {
       page,
       limit,
@@ -548,14 +569,28 @@ export class DraftService {
         yearsOfService: player.yearsOfService,
         headshot: player.headshot,
         takenBy: player.leaguePlayers[0]?.team ?? null,
-        // No global contract table yet, so there is nothing honest to put
-        // here. The client's answers have startup contracts coming from the
-        // same API as the player sync.
-        contract: null,
+        contract: formatReferenceContract(
+          contractsByPlayer.get(player.id) ?? [],
+        ),
         stats: averages.get(player.id) ?? null,
       })),
     };
   }
+}
+
+/** "$45.0M · 3 yrs" — what the startup pool column shows from CapReference. */
+function formatReferenceContract(
+  years: { salary: number }[],
+): string | null {
+  if (years.length === 0) return null;
+  const first = years[0].salary;
+  const money =
+    Math.abs(first) >= 1_000_000
+      ? `$${(first / 1_000_000).toFixed(1)}M`
+      : Math.abs(first) >= 1_000
+        ? `$${Math.round(first / 1_000)}K`
+        : `$${first}`;
+  return `${money} · ${years.length} yr${years.length === 1 ? '' : 's'}`;
 }
 
 /** Whole years between a birthdate and today, in UTC so it cannot drift. */

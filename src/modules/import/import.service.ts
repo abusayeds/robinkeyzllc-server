@@ -203,6 +203,20 @@ export class ImportService {
 
     await this.playerService.rememberAlias(playerId, row.rawPlayer, userId);
 
+    // The name question is answered, so its issue goes with it.
+    //
+    // The preview blocks Confirm on a row that still carries any issue, not
+    // only on an unmatched one, so leaving "No NBA player matches ..." behind
+    // kept the Import button disabled after the player had just been created —
+    // and the only way past it was to delete the file and upload it again,
+    // which matched by the alias this method had already written.
+    //
+    // Only the player issues are dropped. A bad salary or an unknown team is
+    // a different problem and is still waiting.
+    const remaining = this.issuesOf(row.issues).filter(
+      (issue) => issue.field !== 'player',
+    );
+
     await this.prisma.importRow.update({
       where: { id: rowId },
       data: {
@@ -210,6 +224,11 @@ export class ImportService {
         matchStatus: NameMatchStatus.matched,
         matchMethod: null,
         matchConfidence: 1,
+        issues: {
+          list: remaining,
+          // The candidate list was the question. It is answered.
+          candidates: [],
+        } as unknown as Prisma.InputJsonValue,
       },
     });
 

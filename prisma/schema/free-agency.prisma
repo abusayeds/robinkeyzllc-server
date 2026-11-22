@@ -19,6 +19,11 @@ model FreeAgencyOffer {
   contractType ContractType @default(standard)
   signedVia    SignedVia    @default(capSpace)
 
+  // Rule 10.6 — a player or team option, and only on the final season. Null
+  // means the deal runs to its end with no option on it. Early termination is
+  // not offered: the rule names the two.
+  finalYearOption ContractOptionType?
+
   // Rule 10.1 — a partially guaranteed offer, one figure per season in the
   // same order `offerSeasons` produces them. Empty for every other contract
   // type, where the type alone decides the guarantee. Per season rather than

@@ -37,6 +37,7 @@ const OFFER_SELECT = {
   raisePct: true,
   contractType: true,
   signedVia: true,
+  finalYearOption: true,
   guaranteedAmounts: true,
   status: true,
   checks: true,
@@ -237,6 +238,25 @@ export class FreeAgencyService {
       league.seasonStartYear,
     );
 
+    // Rule 10.6 — an option sits on the final year of a contract, so there
+    // has to be a year before it. A two-way deal carries no salary and so
+    // carries no option either.
+    const finalYearOption = payload.finalYearOption ?? null;
+    if (finalYearOption !== null) {
+      if (terms.years < 2) {
+        throw new AppError(
+          HttpStatus.BAD_REQUEST,
+          'An option goes on the final year of a contract, so the offer needs at least two years.',
+        );
+      }
+      if (terms.contractType === ContractType.twoWay) {
+        throw new AppError(
+          HttpStatus.BAD_REQUEST,
+          'A two-way contract carries no option.',
+        );
+      }
+    }
+
     const context = await this.contextFor(leagueId, teamId, league);
     const checks = checkOffer(terms, {
       ...context,
@@ -257,6 +277,7 @@ export class FreeAgencyService {
         raisePct: terms.raisePct,
         contractType: terms.contractType,
         signedVia: terms.signedVia,
+        finalYearOption,
         guaranteedAmounts,
         checks: checks as unknown as Prisma.InputJsonValue,
         expiresAt: payload.expiresAt ? new Date(payload.expiresAt) : null,
@@ -268,6 +289,7 @@ export class FreeAgencyService {
         raisePct: terms.raisePct,
         contractType: terms.contractType,
         signedVia: terms.signedVia,
+        finalYearOption,
         // Replaced outright rather than merged: a re-bid over fewer years
         // would otherwise keep guarantees for seasons that no longer exist.
         guaranteedAmounts: { set: guaranteedAmounts },
@@ -374,6 +396,10 @@ export class FreeAgencyService {
               seasonStartYear: season.seasonStartYear,
               salary: isTwoWay ? 0 : season.salary,
               capHit: isTwoWay ? 0 : season.salary,
+              // Rule 10.6 — the option the offer carried, on the final year
+              // and nowhere else.
+              optionType:
+                index === seasons.length - 1 ? offer.finalYearOption : null,
               ...guaranteeForSeason(offer, index),
             })),
           },
@@ -656,10 +682,19 @@ export class FreeAgencyService {
         event.startDate <= now && (event.endDate ?? event.startDate) >= now,
     );
 
+    // Article 2 — LeagueSettings.salaryCap predates the CapYear table and is
+    // 0 on every league, which is why this page said the league had no cap set.
+    const effective = await this.capService.forLeague(
+      leagueId,
+      seasonStartYear,
+    );
+
     return {
       season: league.season,
       seasonStartYear,
-      settings: league.settings,
+      settings: league.settings
+        ? { ...league.settings, salaryCap: effective.salaryCap }
+        : null,
       freeAgencyStyle: league.settings?.freeAgencyStyle ?? null,
       windowOpen: Boolean(open),
       window: open ?? windows[0] ?? null,
@@ -778,6 +813,7 @@ export class FreeAgencyService {
       })),
       // Empty unless the offer is partially guaranteed, so the modal can show
       // back exactly what was named rather than guessing at it.
+      finalYearOption: row.finalYearOption,
       guaranteedAmounts: row.guaranteedAmounts,
       checks,
       isLegal: offerIsLegal(checks),

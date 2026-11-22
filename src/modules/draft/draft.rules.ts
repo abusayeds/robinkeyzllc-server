@@ -8,9 +8,15 @@ import { DraftFormat, PickProtectionOutcome } from '@prisma/client';
  * caller has already read, so each rule can be read on its own.
  */
 
-/** The display form the pick pages use: 2026 becomes "2026-2027". */
-export const draftYearLabel = (seasonStartYear: number) =>
-  `${seasonStartYear}-${seasonStartYear + 1}`;
+/**
+ * The draft year, written the way the rest of the app writes it.
+ *
+ * A pick belongs to one draft, which is held in one calendar year, so the span
+ * form "2026-2027" read as though a pick could land in either. Every other
+ * screen — the dashboard's draft assets, the draft room, the pick pages —
+ * already shows the single year.
+ */
+export const draftYearLabel = (seasonStartYear: number) => `${seasonStartYear}`;
 
 export const roundLabel = (round: number) =>
   round === 1 ? '1st Round' : round === 2 ? '2nd Round' : `Round ${round}`;
@@ -55,16 +61,18 @@ export function protectionLabel(
 }
 
 /**
- * Rule 12.1 — picks may be traded up to `windowDrafts` drafts ahead. The
- * current league year's own draft is included: it has not happened yet, and a
- * pick in it is as tradeable as any other.
+ * Rule 12.1 — the drafts a pick may be traded in.
+ *
+ * The current league year's own draft counts as one of them: it has not
+ * happened yet, and a pick in it is as tradeable as any other. So a window of
+ * 7 is 7 drafts in all, this year plus the six after it, and not 8.
  */
 export function draftWindowYears(
   currentSeasonStartYear: number,
   windowDrafts: number,
 ): number[] {
   const years: number[] = [];
-  for (let i = 0; i <= windowDrafts; i += 1) {
+  for (let i = 0; i < windowDrafts; i += 1) {
     years.push(currentSeasonStartYear + i);
   }
   return years;
@@ -165,8 +173,10 @@ export function untradeableReason(
   // Rule 12.3 — a frozen pick cannot be traded, with or without protections.
   if (pick.frozenInSeason !== null) return 'frozen';
 
+  // The window counts this draft as one of its own, so the last tradeable
+  // year is one short of the plain sum.
   const lastTradeableYear =
-    options.currentSeasonStartYear + options.windowDrafts;
+    options.currentSeasonStartYear + options.windowDrafts - 1;
   if (
     pick.seasonStartYear < options.currentSeasonStartYear ||
     pick.seasonStartYear > lastTradeableYear

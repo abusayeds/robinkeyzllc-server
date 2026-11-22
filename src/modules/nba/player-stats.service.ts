@@ -177,6 +177,15 @@ export class PlayerStatsService {
    * existed carry no team, and those read null.
    */
   async career(playerId: number): Promise<CareerSeason[]> {
+    // The feed's own season rows first. They are the whole of a player's
+    // career; the stored game lines only cover the nights this deployment has
+    // pulled, which for an app that started syncing this season is one season
+    // and a handful of games.
+    const published = await this.prisma.playerSeasonAverage.findMany({
+      where: { playerId },
+      orderBy: { season: 'desc' },
+    });
+
     const rows = await this.prisma.playerGameStat.groupBy({
       by: ['season', 'nbaTeamId'],
       where: { playerId },
@@ -196,7 +205,7 @@ export class PlayerStatsService {
         fta: true,
       },
     });
-    if (rows.length === 0) return [];
+    if (rows.length === 0 && published.length === 0) return [];
 
     const teamIds = [
       ...new Set(
@@ -264,7 +273,7 @@ export class PlayerStatsService {
       bySeason.set(row.season, bucket);
     }
 
-    return [...bySeason.entries()]
+    const fromLines = [...bySeason.entries()]
       .sort(([a], [b]) => b - a)
       .map(([season, bucket]) => {
         const sum = bucket.totals;
@@ -292,6 +301,34 @@ export class PlayerStatsService {
           fg3Pct: percent(sum.fg3m, sum.fg3a),
         };
       });
+
+    // Which team he played a published season for is not in the feed's
+    // averages, so a season that also has game lines keeps the team read off
+    // them.
+    const teamOf = new Map(fromLines.map((row) => [row.season, row.team]));
+
+    const merged = new Map<number, CareerSeason>(
+      fromLines.map((row) => [row.season, row]),
+    );
+    for (const row of published) {
+      merged.set(row.season, {
+        season: row.season,
+        team: teamOf.get(row.season) ?? null,
+        gamesPlayed: row.gamesPlayed,
+        pts: row.pts,
+        reb: row.reb,
+        ast: row.ast,
+        stl: row.stl,
+        blk: row.blk,
+        to: row.to,
+        threes: row.fg3m,
+        fgPct: row.fgPct,
+        ftPct: row.ftPct,
+        fg3Pct: row.fg3Pct ?? 0,
+      });
+    }
+
+    return [...merged.values()].sort((a, b) => b.season - a.season);
   }
 
   /**

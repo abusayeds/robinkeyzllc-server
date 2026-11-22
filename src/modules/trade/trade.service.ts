@@ -34,6 +34,7 @@ import { maxIncomingSalary } from '../cap/cap.tiers';
 import { EvaluateTradeDto } from './dto/evaluate-trade.dto';
 import { ProposeTradeDto, TradeAssetDto } from './dto/propose-trade.dto';
 import {
+  blockingChecks,
   checkTrade,
   committedAfter,
   exceptionFor,
@@ -44,6 +45,7 @@ import {
   TradeCheck,
   TradeSide,
   tradeIsLegal,
+  twoWayAfter,
 } from './trade.rules';
 
 /** One threshold measured against where a team lands, for the builder cards. */
@@ -453,6 +455,11 @@ export class TradeService {
           rosterAfter: rosterAfter(side),
           maxRosterSize: side.maxRosterSize,
           rosterMinimum: league.rosterMinimum,
+          // Rule 4.9 — the two-way pool is its own line, never folded into
+          // the 15.
+          twoWayBefore: side.twoWayCount,
+          twoWayAfter: twoWayAfter(side),
+          maxTwoWay: side.maxTwoWay,
           // Each line is measured from where this team lands, so the card
           // can say "$800,000 Over" without doing the arithmetic itself.
           lines: [
@@ -691,6 +698,7 @@ export class TradeService {
               select: {
                 id: true,
                 tradeAcquiredAt: true,
+                slotType: true,
                 player: { select: { name: true, position: true } },
                 contracts: {
                   where: { isActive: true },
@@ -739,12 +747,66 @@ export class TradeService {
     // clock is only started for teams that had to match salaries. Worked out
     // before anything moves, because afterwards the payroll it is judged on
     // has already changed.
+    // buildSides wants the player details flat; the trade rows carry them
+    // nested under leaguePlayer.
+    const assetsForRules = trade.assets.map((asset) => ({
+      kind: asset.kind,
+      fromTeamId: asset.fromTeamId,
+      toTeamId: asset.toTeamId,
+      salary: asset.salary,
+      leaguePlayerId: asset.leaguePlayerId,
+      playerName: asset.leaguePlayer?.player.name ?? null,
+      tradeAcquiredAt: asset.leaguePlayer?.tradeAcquiredAt ?? null,
+      slotType: asset.leaguePlayer?.slotType ?? null,
+    }));
+
     const sidesBefore = await this.buildSides(
       leagueId,
       trade.teams.map((row) => row.team),
-      trade.assets,
+      assetsForRules,
       league,
     );
+
+    // Judged again here, not only when the offer was written.
+    //
+    // An offer is deliberately allowed to be recorded while it breaks a rule,
+    // so a commissioner can see what was attempted. Processing it is a
+    // different thing: this is the moment the players actually move, and
+    // between the proposal and the last acceptance a team can sign, waive or
+    // trade someone else and turn a legal deal into an illegal one. Rule 4.3
+    // in particular blocks every move that would leave a team over its hard
+    // cap, so the ceiling has to be measured against the rosters as they are
+    // now.
+    const finalChecks = checkTrade(sidesBefore, {
+      cap: league.cap,
+      salaryMatching: league.salaryMatching,
+      apronRules: league.apronRules,
+      deadlinePassed: league.deadlinePassed,
+      deadlineLabel: league.deadlineLabel,
+      rosterMinimum: league.rosterMinimum,
+      rookieMinimum: league.rookieMinimum,
+    });
+
+    if (!tradeIsLegal(finalChecks)) {
+      const blocking = blockingChecks(finalChecks);
+      await this.prisma.trade.update({
+        where: { id: tradeId },
+        data: {
+          status: TradeStatus.rejected,
+          rejectedReason:
+            blocking[0]?.label ?? 'This trade breaks a league rule.',
+          checks: finalChecks as unknown as Prisma.InputJsonValue,
+        },
+      });
+      throw new AppError(
+        HttpStatus.BAD_REQUEST,
+        blocking.length === 1
+          ? blocking[0].label
+          : `This trade can no longer be processed: ${blocking
+              .map((check) => check.label)
+              .join('; ')}.`,
+      );
+    }
 
     const absorbing = new Set(
       sidesBefore
@@ -958,6 +1020,115 @@ export class TradeService {
     });
   }
 
+  /**
+   * A commissioner records a Traded Player Exception by hand.
+   *
+   * Article 7 creates an exception out of a trade, and `process()` writes
+   * those itself — nothing here replaces that. This exists for the ones that
+   * did not come from a trade processed in this app: a league carried over
+   * from somewhere else, or a deal settled off the record. Without it those
+   * could not be entered at all, and a team would be short an asset it really
+   * holds.
+   *
+   * Rule 7.4 — an exception is not a trade, so nothing about the team's cap
+   * position is checked here. It is only usable inside one.
+   */
+  async createException(
+    leagueId: number,
+    payload: {
+      teamId: number;
+      amount: number;
+      remaining?: number;
+      expiresAt?: string;
+      label?: string;
+    },
+  ) {
+    const league = await this.leagueState(leagueId);
+    if (!league.allowTradeExceptions) {
+      throw new AppError(
+        HttpStatus.BAD_REQUEST,
+        'This league has trade exceptions turned off.',
+      );
+    }
+
+    const team = await this.prisma.team.findFirst({
+      where: { id: payload.teamId, leagueId },
+      select: { id: true, name: true, abbr: true },
+    });
+    if (!team) {
+      throw new AppError(
+        HttpStatus.BAD_REQUEST,
+        'That team is not in this league.',
+      );
+    }
+
+    const remaining = payload.remaining ?? payload.amount;
+    if (remaining > payload.amount) {
+      throw new AppError(
+        HttpStatus.BAD_REQUEST,
+        'An exception cannot have more left than it was worth.',
+      );
+    }
+
+    // Rule 7.2 — a year, unless the commissioner names the date the original
+    // trade set.
+    const expiresAt = payload.expiresAt
+      ? new Date(payload.expiresAt)
+      : new Date(Date.now() + EXCEPTION_DAYS * 24 * 60 * 60 * 1000);
+
+    if (Number.isNaN(expiresAt.getTime())) {
+      throw new AppError(
+        HttpStatus.BAD_REQUEST,
+        'That expiry date is not a date.',
+      );
+    }
+
+    return this.prisma.tradeException.create({
+      data: {
+        leagueId,
+        teamId: team.id,
+        label: payload.label?.trim() || `${team.abbr} Trade Exception`,
+        amount: payload.amount,
+        remaining,
+        expiresAt,
+        // No source trade: that is the whole point of entering one by hand.
+        sourceTradeId: null,
+      },
+      select: {
+        id: true,
+        label: true,
+        amount: true,
+        remaining: true,
+        expiresAt: true,
+        team: { select: { id: true, name: true, abbr: true } },
+      },
+    });
+  }
+
+  /**
+   * A commissioner retires an exception.
+   *
+   * Deactivated rather than deleted: a trade that already used part of it
+   * points at this row, and removing it would leave that trade describing an
+   * asset that no longer exists.
+   */
+  async retireException(leagueId: number, exceptionId: number) {
+    const existing = await this.prisma.tradeException.findFirst({
+      where: { id: exceptionId, leagueId },
+      select: { id: true, isActive: true },
+    });
+    if (!existing) {
+      throw new AppError(HttpStatus.NOT_FOUND, 'Trade exception not found');
+    }
+
+    await this.prisma.tradeException.update({
+      where: { id: existing.id },
+      data: { isActive: false },
+    });
+
+    return { id: existing.id, isActive: false };
+  }
+
   private async resolveAssets(leagueId: number, payload: ProposeTradeDto) {
     const seasonStartYear = (await this.leagueState(leagueId)).seasonStartYear;
     const resolved: {
@@ -972,6 +1143,8 @@ export class TradeService {
       playerName: string | null;
       /** Rule 5.9 — when a trade last brought this player in. */
       tradeAcquiredAt: Date | null;
+      /** Rule 4.9 — a two-way player holds no standard roster spot. */
+      slotType: RosterSlotType | null;
       /** Rules 12.5-12.7 — the terms agreed on a pick in this trade. */
       protectedTopN: number | null;
       protectionOutcome: PickProtectionOutcome | null;
@@ -1009,6 +1182,7 @@ export class TradeService {
           select: {
             id: true,
             tradeAcquiredAt: true,
+            slotType: true,
             player: { select: { name: true } },
             contracts: {
               where: { isActive: true },
@@ -1039,6 +1213,7 @@ export class TradeService {
           salary: row.contracts[0]?.years[0]?.capHit ?? 0,
           playerName: row.player.name,
           tradeAcquiredAt: row.tradeAcquiredAt,
+          slotType: row.slotType,
           protectedTopN: null,
           protectionOutcome: null,
           protectionFinalYear: null,
@@ -1094,6 +1269,7 @@ export class TradeService {
           salary: 0,
           playerName: null,
           tradeAcquiredAt: null,
+          slotType: null,
           ...this.pickProtection(asset, pick.seasonStartYear),
         });
         continue;
@@ -1139,6 +1315,7 @@ export class TradeService {
         salary: 0,
         playerName: null,
         tradeAcquiredAt: null,
+        slotType: null,
         protectedTopN: null,
         protectionOutcome: null,
         protectionFinalYear: null,
@@ -1229,6 +1406,7 @@ export class TradeService {
       leaguePlayerId?: number | null;
       playerName?: string | null;
       tradeAcquiredAt?: Date | null;
+      slotType?: RosterSlotType | null;
     }[],
     league: Awaited<ReturnType<TradeService['leagueState']>>,
   ): Promise<TradeSide[]> {
@@ -1243,7 +1421,7 @@ export class TradeService {
     );
 
     for (const team of teams) {
-      const [years, dead, holds, roster] = await Promise.all([
+      const [years, dead, holds, roster, twoWay] = await Promise.all([
         this.prisma.contractYear.findMany({
           where: {
             seasonStartYear: league.seasonStartYear,
@@ -1275,6 +1453,14 @@ export class TradeService {
             slotType: RosterSlotType.standard,
           },
         }),
+        this.prisma.leaguePlayer.count({
+          where: {
+            leagueId,
+            teamId: team.id,
+            status: LeaguePlayerStatus.rostered,
+            slotType: RosterSlotType.twoWay,
+          },
+        }),
       ]);
 
       const out = assets.filter((a) => a.fromTeamId === team.id);
@@ -1288,6 +1474,7 @@ export class TradeService {
             name: a.playerName ?? 'Player',
             salary: a.salary,
             tradeAcquiredAt: a.tradeAcquiredAt ?? null,
+            isTwoWay: a.slotType === RosterSlotType.twoWay,
           }));
 
       sides.push({
@@ -1303,6 +1490,8 @@ export class TradeService {
         assetsIn: incoming.length,
         rosterCount: roster,
         maxRosterSize: league.maxRosterSize,
+        twoWayCount: twoWay,
+        maxTwoWay: league.maxTwoWay,
         committed:
           years.reduce((sum, year) => sum + year.capHit, 0) +
           (dead._sum.amount ?? 0) +
@@ -1347,6 +1536,7 @@ export class TradeService {
       cap,
       salaryCap: cap.salaryCap,
       maxRosterSize: league.settings?.maxRosterSize ?? 15,
+      maxTwoWay: league.settings?.maxTwoWay ?? 3,
       // Rule 4.8 — the reserve is counted against the league's own minimum.
       rosterMinimum: league.settings?.minRosterSize ?? 0,
       rookieMinimum: await this.hardCap.rookieMinimum(cap),

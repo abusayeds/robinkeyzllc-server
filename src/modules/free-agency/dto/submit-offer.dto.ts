@@ -9,7 +9,7 @@ import {
   Max,
   Min,
 } from 'class-validator';
-import { ContractType, SignedVia } from '@prisma/client';
+import { ContractOptionType, ContractType, SignedVia } from '@prisma/client';
 
 export class SubmitOfferDto {
   @Type(() => Number)
@@ -44,6 +44,17 @@ export class SubmitOfferDto {
   @IsOptional()
   @IsEnum(SignedVia)
   signedVia?: SignedVia;
+
+  /**
+   * Rule 10.6 — a player or team option on the final season.
+   *
+   * Rejected on a one-year deal in the service, where the length is known:
+   * the rule puts an option on the final year of a contract, which on a
+   * one-year deal would be the only year.
+   */
+  @IsOptional()
+  @IsEnum(ContractOptionType)
+  finalYearOption?: ContractOptionType;
 
   /**
    * Rule 10.1 — what each season is guaranteed for, in season order.

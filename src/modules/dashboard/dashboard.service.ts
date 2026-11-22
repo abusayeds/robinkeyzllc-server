@@ -199,7 +199,8 @@ export class DashboardService {
           usedAt: null,
           seasonStartYear: {
             gte: seasonStartYear,
-            lte: seasonStartYear + pickWindow,
+            // Inclusive of this draft, so a window of 7 lists 7 years, not 8.
+            lte: seasonStartYear + pickWindow - 1,
           },
         },
         select: { seasonStartYear: true, round: true, originalTeamId: true },

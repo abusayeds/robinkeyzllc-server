@@ -200,7 +200,7 @@ export class DraftPicksService {
         inTradingWindow:
           seasonStartYear >= currentSeasonStartYear &&
           seasonStartYear <=
-            currentSeasonStartYear + settings.pickTradingWindowDrafts,
+            currentSeasonStartYear + settings.pickTradingWindowDrafts - 1,
         picks: rows.filter((row) => row.seasonStartYear === seasonStartYear),
       })),
     };

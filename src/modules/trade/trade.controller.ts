@@ -15,6 +15,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { LeagueAuth } from '../../common/decorators/league-auth.decorator';
 import { leagueRole } from '../../utils/role';
 import { sendResponse } from '../../utils/sendResponse';
+import { CreateTradeExceptionDto } from './dto/create-trade-exception.dto';
 import { EvaluateTradeDto } from './dto/evaluate-trade.dto';
 import { ListOnTradeBlockDto } from './dto/list-on-trade-block.dto';
 import { ListTradesDto } from './dto/list-trades.dto';
@@ -95,6 +96,47 @@ export class TradeController {
       statusCode: HttpStatus.OK,
       success: true,
       message: 'Trade exceptions retrieved successfully',
+      data,
+    });
+  }
+
+  /**
+   * A commissioner records an exception the app did not create itself.
+   *
+   * Article 7 writes one out of every trade processed here. This is for the
+   * ones that came from somewhere else, which otherwise could not be entered.
+   */
+  @Post('exceptions')
+  @LeagueAuth(leagueRole.commissioner, leagueRole.coCommissioner)
+  async createException(
+    @Res() res: Response,
+    @Param('leagueId', ParseIntPipe) leagueId: number,
+    @Body() payload: CreateTradeExceptionDto,
+  ) {
+    const data = await this.tradeService.createException(leagueId, payload);
+
+    sendResponse(res, {
+      statusCode: HttpStatus.CREATED,
+      success: true,
+      message: 'Trade exception created successfully',
+      data,
+    });
+  }
+
+  /** A commissioner retires one. Deactivated, never deleted. */
+  @Delete('exceptions/:exceptionId')
+  @LeagueAuth(leagueRole.commissioner, leagueRole.coCommissioner)
+  async retireException(
+    @Res() res: Response,
+    @Param('leagueId', ParseIntPipe) leagueId: number,
+    @Param('exceptionId', ParseIntPipe) exceptionId: number,
+  ) {
+    const data = await this.tradeService.retireException(leagueId, exceptionId);
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'Trade exception retired successfully',
       data,
     });
   }

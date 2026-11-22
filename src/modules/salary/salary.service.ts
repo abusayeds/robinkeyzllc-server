@@ -18,7 +18,9 @@ import { tierFor, TIER, TIER_LABEL } from '../cap/cap.tiers';
 export { TIER, TIER_LABEL };
 
 /** How many seasons ahead the payroll outlook runs, matching the import template. */
-const OUTLOOK_SEASONS = 6;
+// Seven league years, the same window the rule book gives draft picks and the
+// client asked the simulator to show.
+const OUTLOOK_SEASONS = 7;
 
 const CONTRACT_SELECT = {
   id: true,
@@ -35,7 +37,16 @@ const CONTRACT_SELECT = {
       status: true,
       slotType: true,
       birdYears: true,
-      player: { select: { name: true, position: true } },
+      player: {
+        select: {
+          name: true,
+          position: true,
+          // Not in the NBA feed, so a commissioner enters it; the card shows
+          // it beside bird years and both are edited from there.
+          yearsOfService: true,
+          yearsOfServiceEstimated: true,
+        },
+      },
     },
   },
   years: {
@@ -161,6 +172,65 @@ export class SalaryService {
       contractId,
       playerName: contract.leaguePlayer.player.name,
       updated: years.length,
+    };
+  }
+
+  /**
+   * A commissioner corrects a player's bird years or his experience.
+   *
+   * Two different facts, edited together because the card shows them side by
+   * side. Bird years belong to this league's copy of the player (Rule 9.1
+   * counts seasons under contract here), so they are written to
+   * `LeaguePlayer`. Years of service belongs to the player himself and is
+   * shared by every league, so it is written to `Player` — and writing it by
+   * hand clears the estimated flag, because somebody has now said what it is.
+   */
+  async editPlayerService(
+    leagueId: number,
+    leaguePlayerId: number,
+    input: { birdYears?: number; yearsOfService?: number },
+  ) {
+    if (input.birdYears === undefined && input.yearsOfService === undefined) {
+      throw new AppError(
+        HttpStatus.BAD_REQUEST,
+        'Send bird years, years of service, or both.',
+      );
+    }
+
+    const row = await this.prisma.leaguePlayer.findFirst({
+      where: { id: leaguePlayerId, leagueId },
+      select: { id: true, playerId: true, player: { select: { name: true } } },
+    });
+    if (!row) {
+      throw new AppError(
+        HttpStatus.NOT_FOUND,
+        'That player is not in this league.',
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      if (input.birdYears !== undefined) {
+        await tx.leaguePlayer.update({
+          where: { id: row.id },
+          data: { birdYears: input.birdYears },
+        });
+      }
+      if (input.yearsOfService !== undefined) {
+        await tx.player.update({
+          where: { id: row.playerId },
+          data: {
+            yearsOfService: input.yearsOfService,
+            yearsOfServiceEstimated: false,
+          },
+        });
+      }
+    });
+
+    return {
+      leaguePlayerId: row.id,
+      playerName: row.player.name,
+      birdYears: input.birdYears ?? null,
+      yearsOfService: input.yearsOfService ?? null,
     };
   }
 
@@ -328,7 +398,7 @@ export class SalaryService {
   async outlook(leagueId: number, teamId: number, seasons = OUTLOOK_SEASONS) {
     const league = await this.prisma.league.findFirst({
       where: { id: leagueId, isDeleted: false },
-      select: { season: true, settings: { select: { salaryCap: true } } },
+      select: { season: true },
     });
     if (!league) {
       throw new AppError(HttpStatus.NOT_FOUND, 'League not found');
@@ -345,7 +415,19 @@ export class SalaryService {
     const first =
       parseSeasonLabel(league.season) ?? new Date().getUTCFullYear();
     const last = first + seasons - 1;
-    const salaryCap = league.settings?.salaryCap ?? 0;
+
+    // Article 2 holds a cap per league year, so every season is measured
+    // against its own rather than all of them against today's.
+    const capBySeason = new Map<number, number>(
+      await Promise.all(
+        Array.from({ length: seasons }, async (_, index) => {
+          const year = first + index;
+          const effective = await this.capService.forLeague(leagueId, year);
+          return [year, effective.salaryCap] as [number, number];
+        }),
+      ),
+    );
+    const salaryCap = capBySeason.get(first) ?? 0;
 
     const [years, dead, holds] = await Promise.all([
       this.prisma.contractYear.findMany({
@@ -407,16 +489,17 @@ export class SalaryService {
     return {
       team,
       firstSeasonStartYear: first,
-      // One cap for every season, because a league stores only one. The page
-      // says this rather than implying the cap is known years ahead.
       salaryCap,
-      capIsCurrentSeasonOnly: true,
+      // A later season falls back to 0 until the Super Admin enters that league
+      // year, and the page shows a dash rather than todays cap.
+      capIsCurrentSeasonOnly: false,
       seasons: Array.from({ length: seasons }, (_, index) => {
         const seasonStartYear = first + index;
         const payroll = payrollBySeason.get(seasonStartYear) ?? 0;
         const deadMoney = deadBySeason.get(seasonStartYear) ?? 0;
         const capHolds = holdsBySeason.get(seasonStartYear) ?? 0;
         const committed = payroll + deadMoney + capHolds;
+        const seasonCap = capBySeason.get(seasonStartYear) ?? 0;
 
         return {
           seasonStartYear,
@@ -424,7 +507,8 @@ export class SalaryService {
           deadMoney,
           capHolds,
           committed,
-          capSpace: salaryCap > 0 ? salaryCap - committed : null,
+          salaryCap: seasonCap,
+          capSpace: seasonCap > 0 ? seasonCap - committed : null,
           playerCount: countBySeason.get(seasonStartYear) ?? 0,
         };
       }),
@@ -446,6 +530,8 @@ export class SalaryService {
       signedVia: row.signedVia,
       slotType: row.leaguePlayer.slotType,
       birdYears: row.leaguePlayer.birdYears,
+      yearsOfService: row.leaguePlayer.player.yearsOfService,
+      yearsOfServiceEstimated: row.leaguePlayer.player.yearsOfServiceEstimated,
       isRightsHeld: row.leaguePlayer.status === LeaguePlayerStatus.rightsHeld,
       startSeasonStartYear: row.startSeasonStartYear,
       endSeasonStartYear: row.endSeasonStartYear,

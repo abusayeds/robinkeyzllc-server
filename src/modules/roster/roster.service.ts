@@ -8,6 +8,7 @@ import {
 import { AppError } from '../../common/errors/appError';
 import { PrismaService } from '../../prisma/prisma.service';
 import { parseSeasonLabel } from '../../utils/season';
+import { CapService } from '../cap/cap.service';
 
 const ROSTER_SELECT = {
   id: true,
@@ -60,7 +61,10 @@ type RosterRow = Prisma.LeaguePlayerGetPayload<{
 
 @Injectable()
 export class RosterService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly capService: CapService,
+  ) {}
 
   /**
    * Every team's roster, measured against the league's own roster rules.
@@ -229,7 +233,12 @@ export class RosterService {
     const seasonStartYear =
       parseSeasonLabel(league.season) ?? new Date().getUTCFullYear();
 
-    const [rows, dead, holds] = await Promise.all([
+    // Article 2 — the cap is the Super Admin figure for this league year, or
+    // the league's own when it uses custom numbers. LeagueSettings.salaryCap
+    // is the pre-Article-2 column and is 0 on every league, which is what left
+    // this card showing a dash.
+    const [effective, rows, dead, holds] = await Promise.all([
+      this.capService.forLeague(leagueId, seasonStartYear),
       this.prisma.leaguePlayer.findMany({
         where: { leagueId, teamId },
         select: ROSTER_SELECT,
@@ -265,12 +274,14 @@ export class RosterService {
     const payroll = players.reduce((total, p) => total + (p.capHit ?? 0), 0);
     const deadTotal = dead.reduce((total, row) => total + row.amount, 0);
     const holdTotal = holds.reduce((total, row) => total + row.amount, 0);
-    const salaryCap = league.settings?.salaryCap ?? 0;
+    const salaryCap = effective.salaryCap;
     const committed = payroll + deadTotal + holdTotal;
 
     return {
       seasonStartYear,
-      rules: league.settings,
+      // The roster rules the page draws, with the cap replaced by the Article 2
+      // figure so nothing downstream reads the stale column.
+      rules: { ...league.settings, salaryCap },
       team: {
         ...team,
         owner: team.members.find((m) => m.role === 'owner')?.user ?? null,

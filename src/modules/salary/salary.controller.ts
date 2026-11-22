@@ -14,6 +14,7 @@ import { LeagueAuth } from '../../common/decorators/league-auth.decorator';
 import { sendResponse } from '../../utils/sendResponse';
 import { leagueRole } from '../../utils/role';
 import { EditContractDto } from './dto/edit-contract.dto';
+import { EditPlayerServiceDto } from './dto/edit-player-service.dto';
 import { SalaryOverviewDto } from './dto/salary-overview.dto';
 import { SalaryService } from './salary.service';
 
@@ -40,6 +41,35 @@ export class SalaryController {
       statusCode: HttpStatus.OK,
       success: true,
       message: 'Contract updated successfully',
+      data,
+    });
+  }
+
+  /**
+   * A commissioner corrects a player's bird years or his experience.
+   *
+   * Neither comes from the NBA feed: bird years are a league fact and
+   * balldontlie publishes no experience field at all, so both are entered by
+   * hand when the count AVORA works out is wrong.
+   */
+  @Patch('players/:leaguePlayerId/service')
+  @LeagueAuth(leagueRole.commissioner, leagueRole.coCommissioner)
+  async editPlayerService(
+    @Res() res: Response,
+    @Param('leagueId', ParseIntPipe) leagueId: number,
+    @Param('leaguePlayerId', ParseIntPipe) leaguePlayerId: number,
+    @Body() payload: EditPlayerServiceDto,
+  ) {
+    const data = await this.salaryService.editPlayerService(
+      leagueId,
+      leaguePlayerId,
+      payload,
+    );
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'Player service updated successfully',
       data,
     });
   }

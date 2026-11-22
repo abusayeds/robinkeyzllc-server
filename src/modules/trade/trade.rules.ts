@@ -49,6 +49,11 @@ export type TradePlayer = {
   salary: number;
   /** Rule 5.9 — when a trade last brought him in, if one ever did. */
   tradeAcquiredAt: Date | null;
+  /**
+   * Rule 4.9 — a two-way player sits in his own pool of slots and holds no
+   * standard roster spot, so he is counted apart from the 15.
+   */
+  isTwoWay: boolean;
 };
 
 export type TradeSide = {
@@ -68,8 +73,12 @@ export type TradeSide = {
   /** Assets of any kind, so a pick-only side still counts as sending. */
   assetsOut: number;
   assetsIn: number;
+  /** Standard roster players only; two-way players are counted below. */
   rosterCount: number;
   maxRosterSize: number;
+  /** Two-way players on the roster today. */
+  twoWayCount: number;
+  maxTwoWay: number;
   /** Everything this team owes this season, before the trade. */
   committed: number;
   isRepeatTaxpayer: boolean;
@@ -99,8 +108,26 @@ const plural = (count: number, one: string, many: string) =>
 export const committedAfter = (side: TradeSide) =>
   side.committed - side.outgoing + side.incoming;
 
+const standardOnly = (players: TradePlayer[]) =>
+  players.filter((player) => !player.isTwoWay);
+
+/**
+ * The standard roster after the trade.
+ *
+ * Two-way players are left out of both sides of the arithmetic: sending one
+ * away does not open a spot among the 15, and taking one back does not fill
+ * one. They have their own ceiling, checked separately.
+ */
 export const rosterAfter = (side: TradeSide) =>
-  side.rosterCount - side.outgoingPlayers.length + side.incomingPlayers.length;
+  side.rosterCount -
+  standardOnly(side.outgoingPlayers).length +
+  standardOnly(side.incomingPlayers).length;
+
+/** The two-way pool after the trade, measured against its own maximum. */
+export const twoWayAfter = (side: TradeSide) =>
+  side.twoWayCount -
+  side.outgoingPlayers.filter((player) => player.isTwoWay).length +
+  side.incomingPlayers.filter((player) => player.isTwoWay).length;
 
 /**
  * The name a rule line uses: the last word of a two-or-more-word team name,
@@ -304,9 +331,20 @@ function teamChecks(
   const tier = tierFor(after, cap);
   const tools = toolsFor(tier, side.isRepeatTaxpayer);
 
-  const playersOut = side.outgoingPlayers.length;
-  const playersIn = side.incomingPlayers.length;
-  const roster = side.rosterCount - playersOut + playersIn;
+  const roster = rosterAfter(side);
+  const twoWay = twoWayAfter(side);
+
+  // Rule 4.9 — the two-way pool, which is counted apart from the 15.
+  if (twoWay > side.maxTwoWay) {
+    checks.push({
+      ...base,
+      code: `twoWayMax:${side.teamId}`,
+      label: `${side.shortName} would have ${twoWay} two-way players (max ${side.maxTwoWay})`,
+      pass: false,
+      severity: 'blocking',
+      toFix: ['Take back 1 fewer two-way player, or send out 1 more.'],
+    });
+  }
 
   // Rule 4.9 — the roster maximum.
   if (roster <= side.maxRosterSize) {

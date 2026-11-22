@@ -141,11 +141,14 @@ export class PlayerProfileService {
       },
     });
 
-    // The career table is the one read that already knows every season, so the
-    // headline averages are taken from it instead of being asked for again.
-    const [career, gameLog] = await Promise.all([
+    // The headline averages come from the feed's own season row, not from
+    // totalling the game lines in this database: those only cover the nights
+    // this deployment has pulled, so a player with two stored games averaged
+    // out over two games.
+    const [career, gameLog, published] = await Promise.all([
       this.stats.career(playerId),
       this.stats.gameLog(playerId),
+      this.stats.seasonAverages([playerId], seasonStartYear),
     ]);
 
     const contract = membership?.contracts[0] ?? null;
@@ -203,10 +206,11 @@ export class PlayerProfileService {
             seasons: contract.years,
           }
         : null,
-      // The season averages the card leads with. Taken from the career rows
-      // rather than read again: `career` already grouped every season, and the
-      // league's own season is the one its screens are about.
+      // The league's own season, as the feed publishes it. The career table
+      // is the fallback for a season the feed has no row for — a backfilled
+      // past season, or a league running ahead of the real calendar.
       seasonAverages:
+        published.get(playerId) ??
         career.find((row) => row.season === seasonStartYear) ??
         career[0] ??
         null,

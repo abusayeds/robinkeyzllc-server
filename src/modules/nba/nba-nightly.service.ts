@@ -112,6 +112,17 @@ export class NbaNightlyService {
 
     try {
       await this.syncRecentNights();
+
+      // Unconditionally, unlike the half-hourly refresh: that one only
+      // re-reads the averages when a line changed today, so a season whose
+      // figures were never pulled at all would stay empty through every quiet
+      // night. A card falling back to the stored lines is the bug the client
+      // reported, and this is what keeps it from coming back.
+      const season = await this.seasonForToday();
+      if (season !== null) {
+        await this.syncService.syncSeasonAverages(season);
+      }
+
       // Before settling: an injury does not affect a result, but the
       // board should be current by the time anyone reads the news.
       await this.syncService.syncInjuries();

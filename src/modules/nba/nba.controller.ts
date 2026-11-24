@@ -9,7 +9,11 @@ import { NbaSyncService } from './nba-sync.service';
 
 /** Accepts only YYYY-MM-DD, so a stray query string cannot reach the API. */
 const isoDate = (value?: string) =>
-  value && /^d{4}-d{2}-d{2}$/.test(value) ? value : null;
+  value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+
+/** A season as balldontlie numbers them: 2026 is the 2026-27 season. */
+const seasonYear = (value?: string) =>
+  value && /^\d{4}$/.test(value) ? Number(value) : null;
 
 /**
  * Yesterday in UTC.
@@ -178,6 +182,59 @@ export class NbaController {
       statusCode: HttpStatus.OK,
       success: true,
       message: 'Backfill completed',
+      data,
+    });
+  }
+
+  /**
+   * A season's averages as the feed publishes them.
+   *
+   * Defaults to the season the newest stored game belongs to. These are the
+   * figures a player card shows: working them out from the stored lines
+   * instead gives an average over however many nights this deployment has
+   * pulled, which is what made a 17-game season read as 8.
+   */
+  @Post('season-averages')
+  @Auth(role.superAdmin)
+  async seasonAverages(@Res() res: Response, @Query('season') season?: string) {
+    const target =
+      seasonYear(season) ?? (await this.nbaSyncService.currentSeason());
+
+    if (target === null) {
+      throw new AppError(
+        HttpStatus.BAD_REQUEST,
+        'There is no synced season to read averages for. Sync games first, or pass ?season=YYYY.',
+      );
+    }
+
+    const data = await this.nbaSyncService.syncSeasonAverages(target);
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'NBA season averages synced successfully',
+      data,
+    });
+  }
+
+  /**
+   * Every season every rostered player has played, for the career table.
+   *
+   * `?from=YYYY` sets how far back to walk; left out it is twenty-five
+   * seasons, which covers every active career. Long-running by nature — one
+   * request per hundred players per season — and safe to repeat.
+   */
+  @Post('careers')
+  @Auth(role.superAdmin)
+  async careers(@Res() res: Response, @Query('from') from?: string) {
+    const data = await this.nbaSyncService.syncCareerAverages(
+      seasonYear(from) ?? undefined,
+    );
+
+    sendResponse(res, {
+      statusCode: HttpStatus.OK,
+      success: true,
+      message: 'NBA career averages synced successfully',
       data,
     });
   }

@@ -232,6 +232,8 @@ enum SyncJob {
   injuries
   // A season's averages, from /v1/season_averages.
   seasonAverages
+  // The same endpoint walked back season by season, for a career table.
+  careerAverages
 }
 
 enum SyncStatus {

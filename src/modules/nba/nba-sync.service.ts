@@ -15,6 +15,23 @@ const dateOnly = (value: string) => new Date(`${value.slice(0, 10)}T00:00:00Z`);
 /** The season-averages endpoint takes a hundred player ids per request. */
 const AVERAGES_CHUNK = 100;
 
+/**
+ * Between season-average requests, for the same reason `paginate` waits
+ * between pages: a career walk is a few hundred requests and should leave
+ * room for the nightly job running beside it.
+ */
+const AVERAGES_DELAY_MS = 150;
+
+/**
+ * How far back a career walk looks for a player the feed carries no draft
+ * year for — undrafted, international, or a row an import created before any
+ * sync reached him. Twenty-five seasons covers every active career without
+ * asking for the 1980s on every run.
+ */
+const CAREER_MAX_SEASONS = 25;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 @Injectable()
 export class NbaSyncService {
   private readonly logger = new Logger(NbaSyncService.name);
@@ -379,62 +396,182 @@ export class NbaSyncService {
    */
   async syncSeasonAverages(season: number) {
     return this.run(SyncJob.seasonAverages, async (record) => {
-      const players = await this.prisma.player.findMany({
-        where: {
-          bdlPlayerId: { not: null },
-          leaguePlayers: { some: {} },
-        },
-        select: { id: true, bdlPlayerId: true },
-      });
-
+      const players = await this.rosteredPlayers();
       if (players.length === 0) return;
 
       const idByBdl = new Map(
         players.map((player) => [player.bdlPlayerId as number, player.id]),
       );
-      const bdlIds = [...idByBdl.keys()];
 
-      for (let at = 0; at < bdlIds.length; at += AVERAGES_CHUNK) {
-        const chunk = bdlIds.slice(at, at + AVERAGES_CHUNK);
-        const rows = await this.bdl.seasonAverages(season, chunk);
-
-        for (const row of rows) {
-          const playerId = idByBdl.get(row.player_id);
-          if (!playerId || !row.games_played) {
-            record.skipped += 1;
-            continue;
-          }
-
-          // The feed sends percentages as a fraction; every screen in the app
-          // shows them out of a hundred.
-          const asPercent = (value: number | null) =>
-            value === null ? 0 : Math.round(value * 1000) / 10;
-
-          const data = {
-            gamesPlayed: row.games_played,
-            minutes: row.min ?? null,
-            pts: row.pts ?? 0,
-            reb: row.reb ?? 0,
-            ast: row.ast ?? 0,
-            stl: row.stl ?? 0,
-            blk: row.blk ?? 0,
-            to: row.turnover ?? 0,
-            fg3m: row.fg3m ?? 0,
-            fgPct: asPercent(row.fg_pct),
-            ftPct: asPercent(row.ft_pct),
-            fg3Pct: row.fg3_pct === null ? null : asPercent(row.fg3_pct),
-            fetchedAt: new Date(),
-          };
-
-          await this.prisma.playerSeasonAverage.upsert({
-            where: { playerId_season: { playerId, season } },
-            create: { playerId, season, ...data },
-            update: data,
-          });
-          record.updated += 1;
-        }
-      }
+      await this.storeSeasonAverages(
+        season,
+        [...idByBdl.keys()],
+        idByBdl,
+        record,
+      );
     });
+  }
+
+  /**
+   * Every season each rostered player has played, not only the current one.
+   *
+   * A player card's career table was showing a single line because the only
+   * figures in the database were this season's, and the stored game lines go
+   * back no further than the day this deployment started pulling. The feed
+   * answers one season per request, so a career is walked backwards from the
+   * current season, and a player is only asked for in the seasons he could
+   * have played — his draft year is the floor.
+   *
+   * Every season is independent: one the feed refuses is logged and the walk
+   * carries on, because losing twenty good seasons to one bad one would mean
+   * starting the whole thing again.
+   */
+  async syncCareerAverages(fromSeason?: number) {
+    return this.run(SyncJob.careerAverages, async (record) => {
+      const current = await this.currentSeason();
+      if (current === null) {
+        throw new AppError(
+          HttpStatus.FAILED_DEPENDENCY,
+          'No NBA games have been synced yet, so there is no season to count back from. Run a games sync first, or pass ?from=YYYY.',
+        );
+      }
+
+      const players = await this.rosteredPlayers();
+      if (players.length === 0) return;
+
+      const idByBdl = new Map(
+        players.map((player) => [player.bdlPlayerId as number, player.id]),
+      );
+
+      const floor = fromSeason ?? current - CAREER_MAX_SEASONS;
+
+      for (let season = current; season >= floor; season -= 1) {
+        // A draft year the feed does not carry reads as the floor, so such a
+        // player is asked for across the whole window rather than dropped.
+        const bdlIds = players
+          .filter(
+            (player) => Math.max(player.draftYear ?? floor, floor) <= season,
+          )
+          .map((player) => player.bdlPlayerId as number);
+        if (bdlIds.length === 0) continue;
+
+        try {
+          await this.storeSeasonAverages(season, bdlIds, idByBdl, record);
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : 'Unknown failure';
+          this.logger.warn(`Career sync skipped season ${season}: ${message}`);
+        }
+
+        await sleep(AVERAGES_DELAY_MS);
+      }
+
+      await this.deriveYearsOfService(current);
+    });
+  }
+
+  /** The season the newest stored game belongs to, as balldontlie numbers them. */
+  async currentSeason(): Promise<number | null> {
+    const latest = await this.prisma.nbaGame.findFirst({
+      orderBy: { date: 'desc' },
+      select: { season: true },
+    });
+    return latest?.season ?? null;
+  }
+
+  /**
+   * Only the players some league actually rosters. The pool runs to thousands
+   * and nobody reads a card for a player nobody owns, so asking for the rest
+   * would be hundreds of requests for figures no screen shows.
+   */
+  private rosteredPlayers() {
+    return this.prisma.player.findMany({
+      where: { bdlPlayerId: { not: null }, leaguePlayers: { some: {} } },
+      select: { id: true, bdlPlayerId: true, draftYear: true },
+    });
+  }
+
+  /** One season's averages for a set of players, a hundred ids at a time. */
+  private async storeSeasonAverages(
+    season: number,
+    bdlIds: number[],
+    idByBdl: Map<number, number>,
+    record: Tally,
+  ) {
+    // The feed sends percentages as a fraction; every screen in the app shows
+    // them out of a hundred.
+    const asPercent = (value: number | null) =>
+      value === null ? 0 : Math.round(value * 1000) / 10;
+
+    for (let at = 0; at < bdlIds.length; at += AVERAGES_CHUNK) {
+      const chunk = bdlIds.slice(at, at + AVERAGES_CHUNK);
+      const rows = await this.bdl.seasonAverages(season, chunk);
+
+      for (const row of rows) {
+        const playerId = idByBdl.get(row.player_id);
+        if (!playerId || !row.games_played) {
+          record.skipped += 1;
+          continue;
+        }
+
+        const data = {
+          gamesPlayed: row.games_played,
+          minutes: row.min ?? null,
+          pts: row.pts ?? 0,
+          reb: row.reb ?? 0,
+          ast: row.ast ?? 0,
+          stl: row.stl ?? 0,
+          blk: row.blk ?? 0,
+          to: row.turnover ?? 0,
+          fg3m: row.fg3m ?? 0,
+          fgPct: asPercent(row.fg_pct),
+          ftPct: asPercent(row.ft_pct),
+          fg3Pct: row.fg3_pct === null ? null : asPercent(row.fg3_pct),
+          fetchedAt: new Date(),
+        };
+
+        await this.prisma.playerSeasonAverage.upsert({
+          where: { playerId_season: { playerId, season } },
+          create: { playerId, season, ...data },
+          update: data,
+        });
+        record.updated += 1;
+      }
+
+      if (at + AVERAGES_CHUNK < bdlIds.length) await sleep(AVERAGES_DELAY_MS);
+    }
+  }
+
+  /**
+   * Years of service, counted off the career rows a career sync just wrote.
+   *
+   * Rule 10's minimum and maximum scales are read off this number, and until
+   * now nothing filled it: the column sat null and every card showed a dash
+   * for experience. A completed season with at least one game played is a
+   * year of service, so the current season is not counted — it is not over.
+   *
+   * A figure a commissioner typed in by hand is left alone. Only a null, or
+   * one still marked estimated, is written over.
+   */
+  private async deriveYearsOfService(currentSeason: number) {
+    const counts = await this.prisma.playerSeasonAverage.groupBy({
+      by: ['playerId'],
+      where: { season: { lt: currentSeason }, gamesPlayed: { gt: 0 } },
+      _count: { _all: true },
+    });
+
+    for (const row of counts) {
+      await this.prisma.player.updateMany({
+        where: {
+          id: row.playerId,
+          OR: [{ yearsOfService: null }, { yearsOfServiceEstimated: true }],
+        },
+        data: {
+          yearsOfService: row._count._all,
+          yearsOfServiceEstimated: false,
+        },
+      });
+    }
   }
 
   async syncInjuries() {

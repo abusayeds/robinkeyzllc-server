@@ -2,17 +2,18 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 
 /**
- * Season averages, worked out from the game lines already stored.
+ * Season averages as the feed publishes them, falling back to arithmetic.
  *
- * Not a table of its own and not a second sync. balldontlie does have a
- * season-averages endpoint, but its `stats` object changes shape with the
- * category asked for, and a column filled from keys nobody has confirmed is
- * worse than a column filled from arithmetic. `PlayerGameStat` holds every
- * line the nightly job has pulled, so the average is exact and there is only
- * one thing that can be out of date.
+ * `PlayerSeasonAverage` holds what balldontlie reports for a whole season and
+ * is read first. Totalling `PlayerGameStat` instead only covers the nights
+ * this deployment has pulled, so a player seventeen games into a season read
+ * as eight — which is what the client found. The stored lines are still the
+ * fallback for anyone the feed has no row for, because a card with
+ * approximate numbers beats an empty one.
  *
- * A season played before AVORA started syncing has no lines, so it has no
- * averages. `POST /nba/sync/backfill` is how that is fixed.
+ * `POST /nba/sync/season-averages` fills this season, `POST
+ * /nba/sync/careers` walks back through every earlier one, and `POST
+ * /nba/sync/backfill` is what fills the game log itself.
  */
 export type SeasonAverage = {
   season: number;

@@ -12,9 +12,6 @@ import { BalldontlieClient, BdlTeam } from './balldontlie.client';
  */
 const dateOnly = (value: string) => new Date(`${value.slice(0, 10)}T00:00:00Z`);
 
-/** The season-averages endpoint takes a hundred player ids per request. */
-const AVERAGES_CHUNK = 100;
-
 /**
  * Between season-average requests, for the same reason `paginate` waits
  * between pages: a career walk is a few hundred requests and should leave
@@ -403,12 +400,7 @@ export class NbaSyncService {
         players.map((player) => [player.bdlPlayerId as number, player.id]),
       );
 
-      await this.storeSeasonAverages(
-        season,
-        [...idByBdl.keys()],
-        idByBdl,
-        record,
-      );
+      await this.storeSeasonAverages(season, idByBdl, record);
     });
   }
 
@@ -445,18 +437,12 @@ export class NbaSyncService {
 
       const floor = fromSeason ?? current - CAREER_MAX_SEASONS;
 
+      // Every season is walked for the whole league and matched against the
+      // rostered players afterwards, so there is nothing to work out per
+      // player here: a man who did not play a season simply has no row in it.
       for (let season = current; season >= floor; season -= 1) {
-        // A draft year the feed does not carry reads as the floor, so such a
-        // player is asked for across the whole window rather than dropped.
-        const bdlIds = players
-          .filter(
-            (player) => Math.max(player.draftYear ?? floor, floor) <= season,
-          )
-          .map((player) => player.bdlPlayerId as number);
-        if (bdlIds.length === 0) continue;
-
         try {
-          await this.storeSeasonAverages(season, bdlIds, idByBdl, record);
+          await this.storeSeasonAverages(season, idByBdl, record);
         } catch (error) {
           const message =
             error instanceof Error ? error.message : 'Unknown failure';
@@ -491,10 +477,16 @@ export class NbaSyncService {
     });
   }
 
-  /** One season's averages for a set of players, a hundred ids at a time. */
+  /**
+   * One season's averages, kept for the players some league rosters.
+   *
+   * The feed is walked for the whole league and filtered here rather than
+   * asked player by player: the endpoint pages at a hundred whatever ids are
+   * passed, so a filtered request is the same number of round trips with a
+   * chance of quietly dropping people.
+   */
   private async storeSeasonAverages(
     season: number,
-    bdlIds: number[],
     idByBdl: Map<number, number>,
     record: Tally,
   ) {
@@ -503,30 +495,38 @@ export class NbaSyncService {
     const asPercent = (value: number | null) =>
       value === null ? 0 : Math.round(value * 1000) / 10;
 
-    for (let at = 0; at < bdlIds.length; at += AVERAGES_CHUNK) {
-      const chunk = bdlIds.slice(at, at + AVERAGES_CHUNK);
-      const rows = await this.bdl.seasonAverages(season, chunk);
-
+    for await (const { rows } of this.bdl.seasonAverages(season)) {
       for (const row of rows) {
-        const playerId = idByBdl.get(row.player_id);
-        if (!playerId || !row.games_played) {
+        const playerId = idByBdl.get(row.player?.id);
+        const stats = row.stats;
+
+        // No games played is a row for a man who was on a roster and did not
+        // play. There is nothing to average, and writing zeroes would put him
+        // on a career table as though he had.
+        if (!playerId || !stats?.gp) {
           record.skipped += 1;
           continue;
         }
 
         const data = {
-          gamesPlayed: row.games_played,
-          minutes: row.min ?? null,
-          pts: row.pts ?? 0,
-          reb: row.reb ?? 0,
-          ast: row.ast ?? 0,
-          stl: row.stl ?? 0,
-          blk: row.blk ?? 0,
-          to: row.turnover ?? 0,
-          fg3m: row.fg3m ?? 0,
-          fgPct: asPercent(row.fg_pct),
-          ftPct: asPercent(row.ft_pct),
-          fg3Pct: row.fg3_pct === null ? null : asPercent(row.fg3_pct),
+          gamesPlayed: stats.gp,
+          // Minutes per game, as a number here and a string in the column:
+          // nothing calculates on it and a box score's "32:14" shares it.
+          minutes: stats.min === null ? null : String(stats.min),
+          pts: stats.pts ?? 0,
+          reb: stats.reb ?? 0,
+          ast: stats.ast ?? 0,
+          stl: stats.stl ?? 0,
+          blk: stats.blk ?? 0,
+          to: stats.tov ?? 0,
+          fg3m: stats.fg3m ?? 0,
+          fgPct: asPercent(stats.fg_pct),
+          ftPct: asPercent(stats.ft_pct),
+          fg3Pct: stats.fg3_pct === null ? null : asPercent(stats.fg3_pct),
+          // The only age the feed gives on any tier. A birthdate is still the
+          // better answer because it stays right all season; this is what a
+          // card shows until one has been imported.
+          age: stats.age ?? null,
           fetchedAt: new Date(),
         };
 
@@ -537,8 +537,6 @@ export class NbaSyncService {
         });
         record.updated += 1;
       }
-
-      if (at + AVERAGES_CHUNK < bdlIds.length) await sleep(AVERAGES_DELAY_MS);
     }
   }
 

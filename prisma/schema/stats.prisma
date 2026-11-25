@@ -139,6 +139,12 @@ model PlayerSeasonAverage {
   ftPct Float
   fg3Pct Float?
 
+  // His age that season, as the feed reports it. balldontlie carries no
+  // birthdate on any tier, so before this the age on a card was blank unless
+  // a super admin had imported one. A birthdate is still the better answer —
+  // it stays right as the season runs on — and still wins where one exists.
+  age Int?
+
   fetchedAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

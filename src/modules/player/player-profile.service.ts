@@ -167,7 +167,15 @@ export class PlayerProfileService {
         weight: player.weight,
         college: player.college,
         country: player.country,
-        age: ageFrom(player.birthdate),
+        // A birthdate is the better answer and wins: it stays right as the
+        // season runs on, where the feed's figure is his age at the time the
+        // season's row was published. Until one is imported, the feed's is
+        // what keeps the card from showing a dash.
+        age:
+          ageFrom(player.birthdate) ??
+          published.get(playerId)?.age ??
+          career.find((row) => row.age !== null)?.age ??
+          null,
         experience: player.yearsOfService,
         experienceIsEstimated: player.yearsOfServiceEstimated,
         draftInfo: draftInfo(player),

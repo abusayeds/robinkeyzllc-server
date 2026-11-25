@@ -29,6 +29,11 @@ export type SeasonAverage = {
   /** Whole percent. Makes over attempts for the season, not an average of games. */
   fgPct: number;
   ftPct: number;
+  /**
+   * His age that season, where the feed reported one. Null for a season
+   * whose figures were worked out from stored lines, which carry no age.
+   */
+  age: number | null;
 };
 
 /** One row of a career table: a season's averages, and who he played them for. */
@@ -117,6 +122,7 @@ export class PlayerStatsService {
         threes: row.fg3m,
         fgPct: row.fgPct,
         ftPct: row.ftPct,
+        age: row.age,
       });
     }
 
@@ -162,6 +168,7 @@ export class PlayerStatsService {
         // percentages are worked out that way (see `scoring.rules.ts`).
         fgPct: percent(sum.fgm ?? 0, sum.fga ?? 0),
         ftPct: percent(sum.ftm ?? 0, sum.fta ?? 0),
+        age: null,
       });
     }
 
@@ -300,6 +307,7 @@ export class PlayerStatsService {
           fgPct: percent(sum.fgm, sum.fga),
           ftPct: percent(sum.ftm, sum.fta),
           fg3Pct: percent(sum.fg3m, sum.fg3a),
+          age: null,
         };
       });
 
@@ -326,6 +334,7 @@ export class PlayerStatsService {
         fgPct: row.fgPct,
         ftPct: row.ftPct,
         fg3Pct: row.fg3Pct ?? 0,
+        age: row.age,
       });
     }
 

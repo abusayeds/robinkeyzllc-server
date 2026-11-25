@@ -98,24 +98,34 @@ export type BdlBoxScore = {
 };
 
 /**
- * A season's averages as balldontlie publishes them. Percentages come back as
- * a fraction (0.482), which is why the store multiplies them.
+ * A season's averages as balldontlie publishes them.
+ *
+ * The figures sit under `stats`, which also carries ranks, win-loss counts
+ * and a dozen other columns this app has no use for; only the ones a card
+ * shows are typed. Percentages come back as a fraction (0.482), which is why
+ * the store multiplies them, and `min` is a number of minutes per game
+ * rather than the "32:14" a box score uses.
  */
 export type BdlSeasonAverage = {
-  player_id: number;
+  player: { id: number };
   season: number;
-  games_played: number;
-  min: string | null;
-  pts: number | null;
-  reb: number | null;
-  ast: number | null;
-  stl: number | null;
-  blk: number | null;
-  turnover: number | null;
-  fg3m: number | null;
-  fg_pct: number | null;
-  ft_pct: number | null;
-  fg3_pct: number | null;
+  season_type: string;
+  stats: {
+    gp: number | null;
+    min: number | null;
+    pts: number | null;
+    reb: number | null;
+    ast: number | null;
+    stl: number | null;
+    blk: number | null;
+    tov: number | null;
+    fg3m: number | null;
+    fg_pct: number | null;
+    ft_pct: number | null;
+    fg3_pct: number | null;
+    /** His age that season. The only place the feed gives one on any tier. */
+    age: number | null;
+  };
 };
 
 export type BdlInjury = {
@@ -265,26 +275,28 @@ export class BalldontlieClient {
   }
 
   /**
-   * A season's averages, as the feed itself reports them.
+   * One season's averages for the whole league, a page at a time.
    *
    * Asked for rather than worked out from stored lines: this deployment only
    * holds the nights it has pulled, so averaging those gives a figure over
-   * however many games happen to be stored. Up to a hundred players per
-   * request, which the caller chunks to.
+   * however many games happen to be stored.
+   *
+   * `/v1/season_averages` used to take a list of player ids and is no longer
+   * that endpoint — it now answers 400 for anything but a single `player_id`,
+   * and the figures moved under a `stats` object with different key names.
+   * `/v1/season_averages/general` is the replacement. It does accept
+   * `player_ids[]`, but it also paginates: a hundred ids came back as the
+   * first twenty-five rows and no warning, which is the kind of silence that
+   * leaves three quarters of a league looking like it never played. Walking
+   * the season by cursor costs the same six requests and cannot do that.
    */
-  async seasonAverages(
-    season: number,
-    playerIds: number[],
-  ): Promise<BdlSeasonAverage[]> {
-    if (playerIds.length === 0) return [];
-
-    const url = new URL('/v1/season_averages', BASE_URL);
-    url.searchParams.set('season', String(season));
-    for (const id of playerIds) {
-      url.searchParams.append('player_ids[]', String(id));
-    }
-
-    const page = await this.getUrl<BdlSeasonAverage>(url);
-    return page.data ?? [];
+  seasonAverages(season: number) {
+    return this.paginate<BdlSeasonAverage>('/v1/season_averages/general', {
+      season: String(season),
+      // The defaults, named rather than assumed: the endpoint also serves
+      // playoff rows and advanced splits, and a card wants neither.
+      season_type: 'regular',
+      type: 'base',
+    });
   }
 }

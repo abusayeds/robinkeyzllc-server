@@ -4,6 +4,7 @@ import {
   LeagueInviteStatus,
   LeaguePlayerStatus,
   RosterSlotType,
+  TradeStatus,
 } from '@prisma/client';
 import { AppError } from '../../common/errors/appError';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -84,6 +85,7 @@ export class OverviewService {
       deadMoney,
       capHolds,
       pendingOffers,
+      tradesAwaitingApproval,
       upcoming,
       calendarCount,
     ] = await Promise.all([
@@ -126,6 +128,12 @@ export class OverviewService {
       }),
       this.prisma.freeAgencyOffer.count({
         where: { leagueId, status: FreeAgencyOfferStatus.pending },
+      }),
+      // Both teams have accepted and the league requires a commissioner to
+      // sign off. Nothing moves until they do, and until this was reported
+      // there was nothing on the dashboard to tell them so.
+      this.prisma.trade.count({
+        where: { leagueId, status: TradeStatus.awaitingApproval },
       }),
       this.prisma.leagueCalendarEvent.findMany({
         where: {
@@ -303,6 +311,7 @@ export class OverviewService {
       attention: {
         pendingInvites,
         pendingOffers,
+        tradesAwaitingApproval,
         teamsWithoutOwner: totals.filter((team) => !team.hasOwner).length,
         overRoster: overRoster.map((team) => ({
           id: team.id,

@@ -26,6 +26,7 @@ model Team {
   league            League            @relation(fields: [leagueId], references: [id], onDelete: Cascade)
   members           TeamMember[]
   leaguePlayers     LeaguePlayer[]
+  birdRightsHeld    LeaguePlayer[]    @relation("birdRights")
   contracts         Contract[]
   deadMoney         DeadMoney[]
   waivers           Waiver[]

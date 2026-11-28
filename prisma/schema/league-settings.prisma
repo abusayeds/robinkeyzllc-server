@@ -27,6 +27,13 @@ model LeagueSettings {
   // custom league's numbers (Rule 2.6).
   useCustomCapNumbers Boolean @default(false)
 
+  // How much the cap is assumed to grow each league year nobody has entered
+  // figures for yet, as a whole percent. The contracts page needs a number
+  // to draw future seasons against and the CBA sets none, so the
+  // commissioner owns it. Seven is what the client asked for by default; a
+  // season with real figures entered always wins over the projection.
+  capGrowthPct Float @default(7)
+
   customSalaryCap   Int?
   customLuxuryTax   Int?
   customFirstApron  Int?

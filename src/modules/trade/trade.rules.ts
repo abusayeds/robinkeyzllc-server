@@ -14,6 +14,7 @@ import {
   tierFor,
   TIER_LABEL,
   toolsFor,
+  tradeExceptionUse,
 } from '../cap/cap.tiers';
 
 /**
@@ -56,6 +57,14 @@ export type TradePlayer = {
   isTwoWay: boolean;
 };
 
+/** Article 7 — one exception a team has brought to this trade. */
+export type TradeExceptionAsset = {
+  id: number;
+  label: string;
+  /** What was left on it before this trade. */
+  remaining: number;
+};
+
 export type TradeSide = {
   teamId: number;
   teamName: string;
@@ -84,6 +93,12 @@ export type TradeSide = {
   isRepeatTaxpayer: boolean;
   /** Article 4 — the ceiling this team already carries, if any. */
   hardCap: HardCapState | null;
+  /**
+   * Article 7 — the exceptions this team has put in to absorb salary it
+   * takes back. An exception it is trading away is not one of these: that
+   * one leaves, and leaves no room behind.
+   */
+  exceptions: TradeExceptionAsset[];
 };
 
 export type TradeContext = {
@@ -185,6 +200,227 @@ export function aggregationNeeded(
   }
 
   return { required: false, unmatched: null, largest };
+}
+
+/** What the exceptions on one side of a trade ended up carrying. */
+export type ExceptionPlan = {
+  used: {
+    id: number;
+    label: string;
+    absorbed: number;
+    playerIds: number[];
+  }[];
+  /** Incoming salary the exceptions took on altogether. */
+  absorbed: number;
+  /**
+   * Incoming players no single exception was large enough to take. Only
+   * meaningful while salary is still unmatched — Rule 7.4 forbids covering
+   * one player with two exceptions, so these cannot be split up.
+   */
+  unreachable: TradePlayer[];
+};
+
+/**
+ * Rule 7.4 — which incoming players each exception takes on.
+ *
+ * An exception may absorb several players at once as long as their combined
+ * salary fits inside it, but one player may not be covered by two exceptions
+ * and no exception is topped up with outgoing salary. Each player therefore
+ * belongs to exactly one exception, or to none.
+ *
+ * Only as much is spent as the trade actually needs. Using an exception buys
+ * a hard cap (Rule 7.6), and an owner who adds one to a trade that was legal
+ * without it should not pay that price. Players are taken largest first —
+ * that clears the most matching for the fewest exceptions — and each goes
+ * into the tightest exception that still fits him, so a large exception is
+ * kept back for a large contract.
+ */
+export function planExceptionUse(input: {
+  incomingPlayers: TradePlayer[];
+  exceptions: { id: number; label: string; absorbUpTo: number }[];
+  /** Incoming salary above what outgoing salary can match. */
+  excess: number;
+}): ExceptionPlan {
+  const pots = input.exceptions.map((exception) => ({
+    id: exception.id,
+    label: exception.label,
+    left: exception.absorbUpTo,
+    absorbed: 0,
+    playerIds: [] as number[],
+  }));
+
+  const players = [...input.incomingPlayers].sort(
+    (a, b) => b.salary - a.salary,
+  );
+
+  let absorbed = 0;
+  const unreachable: TradePlayer[] = [];
+
+  for (const player of players) {
+    if (absorbed >= input.excess) break;
+
+    const pot = pots
+      .filter((candidate) => candidate.left >= player.salary)
+      .sort((a, b) => a.left - b.left)[0];
+
+    if (!pot) {
+      unreachable.push(player);
+      continue;
+    }
+
+    pot.left -= player.salary;
+    pot.absorbed += player.salary;
+    pot.playerIds.push(player.leaguePlayerId);
+    absorbed += player.salary;
+  }
+
+  return {
+    used: pots
+      .filter((pot) => pot.absorbed > 0)
+      .map((pot) => ({
+        id: pot.id,
+        label: pot.label,
+        absorbed: pot.absorbed,
+        playerIds: pot.playerIds,
+      })),
+    absorbed,
+    unreachable,
+  };
+}
+
+/**
+ * Article 7, settled once for one side of a trade.
+ *
+ * The matching check spends the exceptions and the apron check charges the
+ * hard cap they buy, and the two have to agree, so both read this.
+ */
+export type ExceptionOutcome = {
+  /** False only when the tier forbids it outright (Rules 7.6 and 8.4). */
+  allowed: boolean;
+  why?: string;
+  absorbed: number;
+  used: ExceptionPlan['used'];
+  unreachable: TradePlayer[];
+  /** The largest single exception on offer, for the Rule 7.4 message. */
+  largestPot: number;
+  /** Null when nothing was spent, so nothing was bought. */
+  trigger: HardCapTrigger | null;
+};
+
+export function exceptionOutcome(
+  side: TradeSide,
+  cap: EffectiveCap,
+  tier: Tier,
+  /** Incoming salary outgoing salary can match on its own. */
+  limit: number,
+): ExceptionOutcome {
+  const idle: ExceptionOutcome = {
+    allowed: true,
+    absorbed: 0,
+    used: [],
+    unreachable: [],
+    largestPot: 0,
+    trigger: null,
+  };
+
+  const excess = side.incoming - limit;
+  if (side.exceptions.length === 0 || excess <= 0) return idle;
+
+  const allowance = exceptionAllowance(side, tier, cap);
+  if (!allowance.allowed) {
+    return { ...idle, allowed: false, why: allowance.why };
+  }
+
+  const plan = planExceptionUse({
+    incomingPlayers: side.incomingPlayers,
+    exceptions: allowance.pots,
+    excess,
+  });
+
+  // Rule 7.6 — below the First Apron the ceiling bought is the First Apron;
+  // between the aprons it is the Second. `tradeExceptionUse` already decided
+  // which, so the trigger is read off that rather than re-tested here.
+  const trigger =
+    plan.absorbed === 0
+      ? null
+      : allowance.hardCapAt === TIER.secondApron
+        ? HardCapTrigger.tradeExceptionBetweenAprons
+        : HardCapTrigger.tradeExceptionBelowFirstApron;
+
+  return {
+    allowed: true,
+    absorbed: plan.absorbed,
+    used: plan.used,
+    unreachable: plan.unreachable,
+    largestPot: allowance.pots.reduce(
+      (most, pot) => Math.max(most, pot.absorbUpTo),
+      0,
+    ),
+    trigger,
+  };
+}
+
+/**
+ * What each exception actually spends in this trade.
+ *
+ * `process()` must take exactly what the checks allowed off each exception,
+ * so it asks the same code rather than working the figure out a second time
+ * and risking a different answer.
+ */
+export function exceptionSpend(
+  side: TradeSide,
+  context: TradeContext,
+): { id: number; absorbed: number }[] {
+  if (!context.salaryMatching || side.exceptions.length === 0) return [];
+
+  const tier = tierFor(committedAfter(side), context.cap);
+  const { limit } = maxIncomingSalary({
+    outgoing: side.outgoing,
+    tierAfter: tier,
+    cap: context.cap,
+    capRoomBefore: context.cap.salaryCap - side.committed,
+    wasBelowCapBefore: side.committed < context.cap.salaryCap,
+  });
+
+  return exceptionOutcome(side, context.cap, tier, limit).used.map((row) => ({
+    id: row.id,
+    absorbed: row.absorbed,
+  }));
+}
+
+/**
+ * Rule 7.6 — how much each of a side's exceptions may absorb at this tier,
+ * and whether it may be used at all.
+ */
+export function exceptionAllowance(
+  side: TradeSide,
+  tier: Tier,
+  cap: EffectiveCap,
+): {
+  allowed: boolean;
+  why?: string;
+  hardCapAt: Tier | null;
+  pots: { id: number; label: string; absorbUpTo: number }[];
+} {
+  const ruling = tradeExceptionUse(tier, side.isRepeatTaxpayer, cap, 0);
+  if (!ruling.allowed) {
+    return { allowed: false, why: ruling.why, hardCapAt: null, pots: [] };
+  }
+
+  return {
+    allowed: true,
+    hardCapAt: ruling.hardCapAt,
+    pots: side.exceptions.map((exception) => ({
+      id: exception.id,
+      label: exception.label,
+      absorbUpTo: tradeExceptionUse(
+        tier,
+        side.isRepeatTaxpayer,
+        cap,
+        exception.remaining,
+      ).absorbUpTo,
+    })),
+  };
 }
 
 /**
@@ -334,7 +570,9 @@ function teamChecks(
   const roster = rosterAfter(side);
   const twoWay = twoWayAfter(side);
 
-  // Rule 4.9 — the two-way pool, which is counted apart from the 15.
+  // Rule 4.9 — the two-way pool, counted apart from the 15 and reported
+  // whether it passes or not: a rule that only speaks up when it fails is
+  // indistinguishable from one nobody wrote.
   if (twoWay > side.maxTwoWay) {
     checks.push({
       ...base,
@@ -342,7 +580,18 @@ function teamChecks(
       label: `${side.shortName} would have ${twoWay} two-way players (max ${side.maxTwoWay})`,
       pass: false,
       severity: 'blocking',
+      detail: `This league allows ${side.maxTwoWay} two-way ${plural(side.maxTwoWay, 'player', 'players')}. They hold ${side.twoWayCount} today.`,
       toFix: ['Take back 1 fewer two-way player, or send out 1 more.'],
+    });
+  } else {
+    checks.push({
+      ...base,
+      code: `twoWayMax:${side.teamId}`,
+      label: `${side.shortName} two-way players: ${twoWay} of ${side.maxTwoWay}`,
+      pass: true,
+      severity: 'passed',
+      detail:
+        'Two-way players hold none of the 15 standard roster spots, so they are counted on their own.',
     });
   }
 
@@ -403,12 +652,33 @@ function teamChecks(
     });
   }
 
+  // Article 5's ceiling and Article 7's exceptions are settled together:
+  // what an exception absorbs is not matched, and what it absorbs decides
+  // the hard cap the trade buys.
+  const { limit, ruleName, formula } = maxIncomingSalary({
+    outgoing: side.outgoing,
+    tierAfter: tier,
+    cap,
+    capRoomBefore: cap.salaryCap - side.committed,
+    wasBelowCapBefore: side.committed < cap.salaryCap,
+  });
+  const exceptions = exceptionOutcome(side, cap, tier, limit);
+
   if (context.salaryMatching) {
-    checks.push(...matchingCheck(side, context, cap, tier, after));
+    checks.push(
+      ...matchingCheck(side, context, cap, tier, after, {
+        limit,
+        ruleName,
+        formula,
+        exceptions,
+      }),
+    );
   }
 
   if (context.apronRules) {
-    checks.push(...apronChecks(side, context, cap, tier, tools, after));
+    checks.push(
+      ...apronChecks(side, context, cap, tier, tools, after, exceptions),
+    );
   }
 
   return checks;
@@ -420,23 +690,24 @@ function matchingCheck(
   cap: EffectiveCap,
   tier: Tier,
   after: number,
+  article5: {
+    limit: number;
+    ruleName: string;
+    formula: string;
+    exceptions: ExceptionOutcome;
+  },
 ): TradeCheck[] {
   const base = { teamId: side.teamId, teamAbbr: side.teamAbbr };
+  const { limit, ruleName, formula, exceptions: outcome } = article5;
 
-  const { limit, ruleName, formula } = maxIncomingSalary({
-    outgoing: side.outgoing,
-    tierAfter: tier,
-    cap,
-    capRoomBefore: cap.salaryCap - side.committed,
-    wasBelowCapBefore: side.committed < cap.salaryCap,
-  });
+  const excess = side.incoming - limit;
 
-  if (side.incoming <= limit) {
+  if (excess <= 0) {
     const label =
       ruleName === 'Cap room rule'
         ? `${side.shortName}: salary fits in cap room`
         : `${side.shortName}: salary match OK`;
-    return [
+    const checks: TradeCheck[] = [
       {
         ...base,
         code: `salaryMatch:${side.teamId}`,
@@ -446,27 +717,110 @@ function matchingCheck(
         math: `${ruleName}: ${formula}. Taking back ${money(side.incoming)}.`,
       },
     ];
+
+    // Rule 7.4 — an exception that was not needed keeps its balance, so the
+    // owner is told rather than quietly charged a hard cap for it.
+    if (side.exceptions.length > 0) {
+      checks.push({
+        ...base,
+        code: `exceptionUnused:${side.teamId}`,
+        label: `${side.shortName} don't need a trade exception for this`,
+        pass: true,
+        severity: 'passed',
+        detail:
+          'Outgoing salary covers what is coming back, so nothing is taken off the exception and no hard cap is bought.',
+      });
+    }
+
+    return checks;
   }
 
-  const over = side.incoming - limit;
-  const needed = outgoingNeededFor(side.incoming, side, context);
+  // Article 7 — what matching cannot cover, an exception may.
+  const checks: TradeCheck[] = [];
+  const absorbed = outcome.absorbed;
+
+  if (side.exceptions.length > 0 && !outcome.allowed) {
+    checks.push({
+      ...base,
+      code: `exceptionTier:${side.teamId}`,
+      label: `${side.shortName} can't use a trade exception at this payroll`,
+      pass: false,
+      severity: 'blocking',
+      detail: outcome.why,
+      math: `Rule 7.6 — ${TIER_LABEL[tier]} after the trade.`,
+      toFix: [
+        `Take the exception out of the trade and match ${money(side.incoming)} with salary.`,
+      ],
+    });
+  }
+
+  if (absorbed > 0) {
+    const named = outcome.used
+      .map((row) => `${row.label} (${money(row.absorbed)})`)
+      .join(', ');
+    checks.push({
+      ...base,
+      code: `exceptionUse:${side.teamId}`,
+      label: `${side.shortName} absorb ${money(absorbed)} with a trade exception`,
+      pass: true,
+      severity: 'passed',
+      math: `Rule 7.6 — ${named}.`,
+    });
+  }
+
+  // Rule 7.4 — two exceptions may not be put together for one player, so a
+  // contract larger than every single exception cannot be split across them.
+  if (
+    outcome.allowed &&
+    side.incoming - absorbed > limit &&
+    outcome.unreachable.length > 0 &&
+    outcome.largestPot > 0
+  ) {
+    const stuck = outcome.unreachable[0];
+    checks.push({
+      ...base,
+      code: `exceptionSplit:${side.teamId}`,
+      label: `${side.shortName} can't cover ${stuck.name} with two exceptions`,
+      pass: false,
+      severity: 'blocking',
+      detail: `Rule 7.4 — one player has to fit inside a single exception. The largest available holds ${money(outcome.largestPot)}.`,
+      math: `${stuck.name}: ${money(stuck.salary)}.`,
+    });
+  }
+
+  const unmatched = side.incoming - absorbed;
+
+  if (unmatched <= limit) {
+    checks.push({
+      ...base,
+      code: `salaryMatch:${side.teamId}`,
+      label: `${side.shortName}: salary match OK`,
+      pass: true,
+      severity: 'passed',
+      math: `${ruleName}: ${formula}. Matching ${money(unmatched)} after the exception.`,
+    });
+    return checks;
+  }
+
+  const over = unmatched - limit;
+  const needed = outgoingNeededFor(unmatched, side, context);
   const toFix = [`Take back at least ${money(over)} less salary.`];
   if (needed !== null && needed > side.outgoing) {
     toFix.push(`Send out at least ${money(needed - side.outgoing)} more.`);
   }
 
-  return [
-    {
-      ...base,
-      code: `salaryMatch:${side.teamId}`,
-      label: `${side.shortName} are taking back too much salary`,
-      pass: false,
-      severity: 'blocking',
-      math: `${ruleName}: ${formula}. Taking back ${money(side.incoming)} — ${money(over)} over.`,
-      detail: `${money(after)} after the trade.`,
-      toFix,
-    },
-  ];
+  checks.push({
+    ...base,
+    code: `salaryMatch:${side.teamId}`,
+    label: `${side.shortName} are taking back too much salary`,
+    pass: false,
+    severity: 'blocking',
+    math: `${ruleName}: ${formula}. Taking back ${money(unmatched)} — ${money(over)} over.`,
+    detail: `${money(after)} after the trade.`,
+    toFix,
+  });
+
+  return checks;
 }
 
 function apronChecks(
@@ -476,6 +830,7 @@ function apronChecks(
   tier: Tier,
   tools: ReturnType<typeof toolsFor>,
   after: number,
+  exceptions: ExceptionOutcome,
 ): TradeCheck[] {
   const checks: TradeCheck[] = [];
   const base = { teamId: side.teamId, teamAbbr: side.teamAbbr };
@@ -555,6 +910,11 @@ function apronChecks(
   }
   if (combining && tools.canAggregate) {
     triggers.push(HardCapTrigger.aggregatedSalaries);
+  }
+  // Rule 7.6 — only a trade that actually spends an exception buys its
+  // ceiling. One added and left untouched costs nothing.
+  if (exceptions.trigger) {
+    triggers.push(exceptions.trigger);
   }
 
   const reserve = { teamSalaryAfter: after };

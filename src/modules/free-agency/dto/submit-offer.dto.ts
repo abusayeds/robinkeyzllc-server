@@ -12,6 +12,18 @@ import {
 import { ContractOptionType, ContractType, SignedVia } from '@prisma/client';
 
 export class SubmitOfferDto {
+  /**
+   * Appendix B item 7 — the owner's ranking input.
+   *
+   * Recorded, not acted on: the rule that turns a rank into a starting
+   * salary is the one the rule book leaves undefined.
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  rank?: number;
+
   @Type(() => Number)
   @IsInt()
   @Min(1)

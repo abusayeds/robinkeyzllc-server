@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsInt, IsOptional, Max, Min, ValidateIf } from 'class-validator';
 
 /**
  * A commissioner correcting what the feed cannot supply.
@@ -29,4 +29,18 @@ export class EditPlayerServiceDto {
   @Min(0)
   @Max(30)
   yearsOfService?: number;
+
+  /**
+   * Rule 9.1 — the team his bird years were earned under.
+   *
+   * Null clears it, which is a real answer and not the same as leaving the
+   * field out: a player signed off the street has no rights for anyone to
+   * hold, and somebody has to be able to say so.
+   */
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  birdRightsTeamId?: number | null;
 }

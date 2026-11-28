@@ -58,12 +58,24 @@ export type EffectiveCap = {
 
   /** True when the league has no figures for this year at all. */
   isSet: boolean;
+  /**
+   * True when these figures were grown forward from an earlier league year
+   * rather than entered for this one. Any screen showing a projected season
+   * has to be able to say that it is one.
+   */
+  isProjected: boolean;
 };
 
 /** Exception amounts are rounded to the nearest $1,000 (Article 2). */
 const toThousand = (value: number) => Math.round(value / 1000) * 1000;
 
 const pct = (cap: number, percent: number) => (cap * percent) / 100;
+
+/** What a league assumes the cap grows by when it has said nothing. */
+const DEFAULT_CAP_GROWTH_PCT = 7;
+
+/** How far back a projection will look for a league year to grow forward. */
+const PROJECTION_LOOKBACK_YEARS = 10;
 
 @Injectable()
 export class CapService {
@@ -90,11 +102,26 @@ export class CapService {
           customFirstApron: true,
           customSecondApron: true,
           salaryCap: true,
+          capGrowthPct: true,
         },
       }),
       this.prisma.capYear.findUnique({ where: { seasonStartYear } }),
       this.ruleSet(),
     ]);
+
+    // A league year nobody has entered is grown forward from the most recent
+    // one that was, at the commissioner's rate. Showing nothing for every
+    // future season made a contracts page that runs seven years ahead read
+    // as six blank columns; showing this year's cap for all of them would
+    // have been worse, because it is wrong and says nothing about it.
+    const projected =
+      year === null
+        ? await this.projectFrom(
+            seasonStartYear,
+            settings?.capGrowthPct ?? DEFAULT_CAP_GROWTH_PCT,
+          )
+        : null;
+    const figures = year ?? projected;
 
     const custom =
       settings?.useCustomCapNumbers === true &&
@@ -106,19 +133,19 @@ export class CapService {
     // cap".
     const salaryCap = custom
       ? (settings.customSalaryCap ?? 0)
-      : (year?.salaryCap ?? 0);
+      : (figures?.salaryCap ?? 0);
 
     const luxuryTax = custom
       ? (settings.customLuxuryTax ?? Math.round(salaryCap * 1.215))
-      : (year?.luxuryTax ?? 0);
+      : (figures?.luxuryTax ?? 0);
 
     const firstApron = custom
       ? (settings.customFirstApron ?? Math.round(salaryCap * 1.2671))
-      : (year?.firstApron ?? 0);
+      : (figures?.firstApron ?? 0);
 
     const secondApron = custom
       ? (settings.customSecondApron ?? Math.round(salaryCap * 1.3439))
-      : (year?.secondApron ?? 0);
+      : (figures?.secondApron ?? 0);
 
     return {
       seasonStartYear,
@@ -128,7 +155,7 @@ export class CapService {
       luxuryTax,
       firstApron,
       secondApron,
-      averagePlayerSalary: year?.averagePlayerSalary ?? 0,
+      averagePlayerSalary: figures?.averagePlayerSalary ?? 0,
 
       salaryFloor: Math.round(pct(salaryCap, rules.salaryFloorPct)),
       maxSalary0to6: Math.round(pct(salaryCap, rules.maxSalary0to6Pct)),
@@ -162,6 +189,46 @@ export class CapService {
       qualifyingOfferPriorSalaryPct: rules.qualifyingOfferPriorSalaryPct,
 
       isSet: salaryCap > 0,
+      isProjected: !custom && year === null && salaryCap > 0,
+    };
+  }
+
+  /**
+   * A league year's figures grown forward from the last one that was entered.
+   *
+   * Every line rises by the same rate, so the tax line and both aprons keep
+   * their distance from the cap instead of drifting apart season by season.
+   * The average player salary is grown too, because Rule 9.4's cap holds are
+   * a percentage of it and a hold measured against a stale average would be
+   * wrong in exactly the seasons this is drawn for.
+   *
+   * Nothing is written: a projection is an answer to a question about a
+   * season, not a decision about it, and the Super Admin's own figures must
+   * always replace it silently when they arrive.
+   */
+  private async projectFrom(seasonStartYear: number, growthPct: number) {
+    const base = await this.prisma.capYear.findFirst({
+      where: {
+        seasonStartYear: {
+          lt: seasonStartYear,
+          gte: seasonStartYear - PROJECTION_LOOKBACK_YEARS,
+        },
+      },
+      orderBy: { seasonStartYear: 'desc' },
+    });
+    if (!base) return null;
+
+    const factor =
+      (1 + growthPct / 100) ** (seasonStartYear - base.seasonStartYear);
+    const grown = (value: number) => Math.round(value * factor);
+
+    return {
+      seasonStartYear,
+      salaryCap: grown(base.salaryCap),
+      luxuryTax: grown(base.luxuryTax),
+      firstApron: grown(base.firstApron),
+      secondApron: grown(base.secondApron),
+      averagePlayerSalary: grown(base.averagePlayerSalary),
     };
   }
 

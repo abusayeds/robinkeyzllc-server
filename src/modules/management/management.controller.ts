@@ -14,10 +14,12 @@ import {
 import { LeagueContentType } from '@prisma/client';
 import type { Response } from 'express';
 import { sendResponse } from 'src/utils/sendResponse';
+import { AppError } from '../../common/errors/appError';
 import { Auth } from '../../common/decorators/auth.decorator';
+import { CurrentLeague } from '../../common/decorators/current-league.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { LeagueAuth } from '../../common/decorators/league-auth.decorator';
-import { leagueRole, role } from '../../utils/role';
+import { role } from '../../utils/role';
 import { saveLeagueContentDto } from './dto/league-content.dto';
 import { crateManagementDto } from './dto/management.dto';
 import { managementService } from './management.service';
@@ -106,16 +108,33 @@ export class managementController {
     });
   }
 
+  /**
+   * Help & Support, Privacy, Terms and About Us are the Super Admin's.
+   *
+   * `LeagueAuth` still runs, because it is what proves the league exists and
+   * puts the context on the request; what it cannot express is "super admin
+   * only", since it deliberately grants a super admin the commissioner's
+   * role inside every league. The check is therefore made here, where the
+   * distinction survives.
+   */
   @Put('league/:leagueId/:type')
-  @LeagueAuth(leagueRole.commissioner, leagueRole.coCommissioner)
+  @LeagueAuth()
   async leagueContentSave(
     @Res() res: Response,
     @CurrentUser('id') userId: number,
+    @CurrentLeague('isSuperAdmin') isSuperAdmin: boolean,
     @Param('leagueId', ParseIntPipe) leagueId: number,
     @Param('type', new ParseEnumPipe(LeagueContentType))
     type: LeagueContentType,
     @Body() payload: saveLeagueContentDto,
   ) {
+    if (!isSuperAdmin) {
+      throw new AppError(
+        HttpStatus.FORBIDDEN,
+        'These pages are maintained by the Super Admin. Everyone can read them; nobody else can change them.',
+      );
+    }
+
     const data = await this.managementService.leagueContentSaveDB(
       leagueId,
       type,

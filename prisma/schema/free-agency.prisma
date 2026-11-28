@@ -19,6 +19,13 @@ model FreeAgencyOffer {
   contractType ContractType @default(standard)
   signedVia    SignedVia    @default(capSpace)
 
+  // Appendix B item 7 — the owner's ranking input, recorded as entered.
+  // The rule book says a starting salary is "set from the owner's ranking
+  // input" and then says the rules for it are to be defined, so nothing here
+  // turns a rank into money. Storing it keeps what the owner meant until
+  // somebody writes that rule.
+  rank Int?
+
   // Rule 10.6 — a player or team option, and only on the final season. Null
   // means the deal runs to its end with no option on it. Early termination is
   // not offered: the rule names the two.

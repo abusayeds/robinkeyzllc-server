@@ -333,13 +333,13 @@ export class PlayerService {
     const readable: BirthdateRow[] = [];
 
     for (const row of file.rows) {
-      if (row.issue || !row.birthdate) {
+      if (row.issue || (!row.birthdate && row.experience === null)) {
         problems.push({
           lineNumber: row.lineNumber,
           player: row.player,
           birthdate: row.rawBirthdate,
           status: 'invalid',
-          message: row.issue ?? 'The birthdate could not be read.',
+          message: row.issue ?? 'The row could not be read.',
           candidates: [],
         });
         continue;
@@ -392,8 +392,17 @@ export class PlayerService {
             message: `Line ${first.lineNumber} gives the same player a different birthdate (${first.rawBirthdate}).`,
             candidates: [],
           });
+        } else if (first.experience !== row.experience) {
+          problems.push({
+            lineNumber: row.lineNumber,
+            player: row.player,
+            birthdate: row.rawBirthdate,
+            status: 'conflict',
+            message: `Line ${first.lineNumber} gives the same player different experience (${first.rawExperience || 'blank'}).`,
+            candidates: [],
+          });
         }
-        // A repeat of the same date is harmless, and is already queued.
+        // A repeat of the same figures is harmless, and is already queued.
         return;
       }
 
@@ -403,24 +412,43 @@ export class PlayerService {
 
     const existing = await this.prisma.player.findMany({
       where: { id: { in: resolved.map((item) => item.playerId) } },
-      select: { id: true, birthdate: true },
+      select: { id: true, birthdate: true, yearsOfService: true },
     });
-    const birthdateById = new Map(
-      existing.map((player) => [player.id, player.birthdate]),
-    );
+    const storedById = new Map(existing.map((player) => [player.id, player]));
 
-    const changes = resolved.filter(
-      ({ row, playerId }) =>
-        birthdateById.get(playerId)?.getTime() !== row.birthdate?.getTime(),
-    );
+    // A blank cell leaves what is stored alone. Only a figure that is both
+    // given and different counts as a change, so re-importing the same file
+    // reports nothing to do.
+    const changes = resolved.filter(({ row, playerId }) => {
+      const stored = storedById.get(playerId);
+      const dateChanged =
+        row.birthdate !== null &&
+        stored?.birthdate?.getTime() !== row.birthdate.getTime();
+      const yearsChanged =
+        row.experience !== null && stored?.yearsOfService !== row.experience;
+      return dateChanged || yearsChanged;
+    });
 
     if (!dryRun && changes.length > 0) {
-      await this.writeBirthdates(
-        changes.map(({ row, playerId }) => ({
-          playerId,
-          birthdate: row.birthdate as Date,
-        })),
-      );
+      const dates = changes.filter(({ row }) => row.birthdate !== null);
+      if (dates.length > 0) {
+        await this.writeBirthdates(
+          dates.map(({ row, playerId }) => ({
+            playerId,
+            birthdate: row.birthdate as Date,
+          })),
+        );
+      }
+
+      const years = changes.filter(({ row }) => row.experience !== null);
+      if (years.length > 0) {
+        await this.writeExperience(
+          years.map(({ row, playerId }) => ({
+            playerId,
+            yearsOfService: row.experience as number,
+          })),
+        );
+      }
     }
 
     return {
@@ -451,6 +479,35 @@ export class PlayerService {
    * round trips would outlast an interactive transaction, and this is already
    * atomic without one.
    */
+  /**
+   * Years of service, entered by hand.
+   *
+   * The estimated flag is cleared with it: a figure a Super Admin typed is
+   * the answer, and the nightly derivation from played seasons must never
+   * overwrite it afterwards.
+   */
+  private async writeExperience(
+    updates: { playerId: number; yearsOfService: number }[],
+  ) {
+    for (let i = 0; i < updates.length; i += BIRTHDATE_CHUNK) {
+      const chunk = updates.slice(i, i + BIRTHDATE_CHUNK);
+      const values = Prisma.join(
+        chunk.map(
+          (update) =>
+            Prisma.sql`(${update.playerId}::int, ${update.yearsOfService}::int)`,
+        ),
+      );
+
+      await this.prisma.$executeRaw`
+        UPDATE "Player" AS p
+        SET "yearsOfService" = v."yearsOfService",
+            "yearsOfServiceEstimated" = false
+        FROM (VALUES ${values}) AS v("id", "yearsOfService")
+        WHERE p."id" = v."id"
+      `;
+    }
+  }
+
   private async writeBirthdates(
     updates: { playerId: number; birthdate: Date }[],
   ) {

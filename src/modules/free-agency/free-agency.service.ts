@@ -16,6 +16,11 @@ import { AppError } from '../../common/errors/appError';
 import { PrismaService } from '../../prisma/prisma.service';
 import { parseSeasonLabel } from '../../utils/season';
 import { CapService } from '../cap/cap.service';
+import { TIER_LABEL, tierFor, toolsFor } from '../cap/cap.tiers';
+import {
+  PlayerStatsService,
+  type SeasonAverage,
+} from '../nba/player-stats.service';
 import { NewsPublisher } from '../news/news.publisher';
 import { SubmitOfferDto } from './dto/submit-offer.dto';
 import {
@@ -37,6 +42,7 @@ const OFFER_SELECT = {
   raisePct: true,
   contractType: true,
   signedVia: true,
+  rank: true,
   finalYearOption: true,
   guaranteedAmounts: true,
   status: true,
@@ -55,7 +61,9 @@ const OFFER_SELECT = {
       birdYears: true,
       teamId: true,
       team: { select: { id: true, name: true, abbr: true } },
-      player: { select: { id: true, name: true, position: true } },
+      player: {
+        select: { id: true, name: true, position: true, headshot: true },
+      },
     },
   },
 } satisfies Prisma.FreeAgencyOfferSelect;
@@ -162,6 +170,7 @@ export class FreeAgencyService {
     private readonly prisma: PrismaService,
     private readonly capService: CapService,
     private readonly news: NewsPublisher,
+    private readonly playerStats: PlayerStatsService,
   ) {}
 
   async list(leagueId: number, status?: FreeAgencyOfferStatus) {
@@ -174,12 +183,39 @@ export class FreeAgencyService {
       }),
     ]);
 
+    // Counted across the whole league rather than per row, so a board with
+    // forty offers on it is still one query.
+    const pendingPerPlayer = new Map<number, number>();
+    for (const offer of offers) {
+      if (offer.status !== FreeAgencyOfferStatus.pending) continue;
+      pendingPerPlayer.set(
+        offer.leaguePlayerId,
+        (pendingPerPlayer.get(offer.leaguePlayerId) ?? 0) + 1,
+      );
+    }
+
+    const averages = await this.playerStats.seasonAverages(
+      [...new Set(offers.map((offer) => offer.leaguePlayer.player.id))],
+      league.seasonStartYear,
+    );
+
     return {
       seasonStartYear: league.seasonStartYear,
       windowOpen: league.windowOpen,
       window: league.window,
       freeAgencyStyle: league.freeAgencyStyle,
-      offers: offers.map((offer) => this.toOffer(offer)),
+      offers: offers.map((offer) =>
+        this.toOffer(
+          offer,
+          // His own offer is not competition for himself.
+          Math.max(
+            0,
+            (pendingPerPlayer.get(offer.leaguePlayerId) ?? 0) -
+              (offer.status === FreeAgencyOfferStatus.pending ? 1 : 0),
+          ),
+          averages.get(offer.leaguePlayer.player.id) ?? null,
+        ),
+      ),
     };
   }
 
@@ -277,6 +313,7 @@ export class FreeAgencyService {
         raisePct: terms.raisePct,
         contractType: terms.contractType,
         signedVia: terms.signedVia,
+        rank: payload.rank ?? null,
         finalYearOption,
         guaranteedAmounts,
         checks: checks as unknown as Prisma.InputJsonValue,
@@ -289,6 +326,7 @@ export class FreeAgencyService {
         raisePct: terms.raisePct,
         contractType: terms.contractType,
         signedVia: terms.signedVia,
+        rank: payload.rank ?? null,
         finalYearOption,
         // Replaced outright rather than merged: a re-bid over fewer years
         // would otherwise keep guarantees for seasons that no longer exist.
@@ -503,11 +541,14 @@ export class FreeAgencyService {
         birdYears: true,
         teamId: true,
         team: { select: { id: true, name: true, abbr: true } },
+        birdRightsTeam: { select: { id: true, name: true, abbr: true } },
         player: {
           select: {
             id: true,
             name: true,
             position: true,
+            // The board draws a headshot beside every name.
+            headshot: true,
             yearsOfService: true,
             yearsOfServiceEstimated: true,
             nbaTeam: { select: { abbreviation: true } },
@@ -531,6 +572,7 @@ export class FreeAgencyService {
             raisePct: true,
             contractType: true,
             signedVia: true,
+            rank: true,
             guaranteedAmounts: true,
             expiresAt: true,
             createdAt: true,
@@ -544,6 +586,14 @@ export class FreeAgencyService {
 
     const team = teamId ? await this.teamState(leagueId, teamId, league) : null;
 
+    // The same figures the player card shows, from the same service: a board
+    // that worked them out for itself would drift from the card the moment
+    // either changed.
+    const averages = await this.playerStats.seasonAverages(
+      players.map((row) => row.player.id),
+      league.seasonStartYear,
+    );
+
     return {
       seasonStartYear: league.seasonStartYear,
       windowOpen: league.windowOpen,
@@ -555,17 +605,41 @@ export class FreeAgencyService {
         const lastSalary =
           last?.years.find((y) => y.seasonStartYear === last.endSeasonStartYear)
             ?.salary ?? null;
+        const line = averages.get(row.player.id) ?? null;
 
         return {
           leaguePlayerId: row.id,
           playerId: row.player.id,
           name: row.player.name,
           position: row.player.position,
+          headshot: row.player.headshot,
           nbaTeam: row.player.nbaTeam?.abbreviation ?? null,
           experience: row.player.yearsOfService,
           experienceIsEstimated: row.player.yearsOfServiceEstimated,
           birdYears: row.birdYears,
           birdRights: birdRightsOf(row.birdYears),
+          // Rule 9.1 — who holds them. Falls back to the team still listed
+          // against him, which is the answer for a player whose rights are
+          // held but who has not been given an explicit owner.
+          birdRightsTeam: row.birdRightsTeam ?? row.team,
+          // Null where the feed has published nothing for him this season,
+          // which a board shows as a dash rather than as a zero: a man who
+          // has not played is not a man averaging nothing.
+          age: line?.age ?? null,
+          stats: line
+            ? {
+                gamesPlayed: line.gamesPlayed,
+                pts: line.pts,
+                reb: line.reb,
+                ast: line.ast,
+                stl: line.stl,
+                blk: line.blk,
+                to: line.to,
+                threes: line.threes,
+                fgPct: line.fgPct,
+                ftPct: line.ftPct,
+              }
+            : null,
           status: row.status,
           // A player whose rights are held becomes restricted the moment
           // somebody bids, which is the whole difference on this screen.
@@ -580,6 +654,7 @@ export class FreeAgencyService {
             raisePct: offer.raisePct,
             contractType: offer.contractType,
             signedVia: offer.signedVia,
+            rank: offer.rank,
             // The offer sheet reopens on an existing bid, so a partial
             // guarantee has to come back the way it was entered.
             guaranteedAmounts: offer.guaranteedAmounts,
@@ -612,16 +687,37 @@ export class FreeAgencyService {
     if (!team) return null;
 
     const context = await this.contextFor(leagueId, teamId, league);
+
+    // Room under a line, signed: negative means the team is over it. A dash
+    // is only ever shown for a league year nobody has entered figures for.
+    const roomUnder = (line: number) =>
+      context.capIsSet ? line - context.committed : null;
+
     return {
       ...team,
       salaryCap: context.salaryCap,
+      capIsSet: context.capIsSet,
       minPlayerSalary: context.minPlayerSalary,
       maxPlayerSalary: context.maxPlayerSalary,
+      // Rule 10.2 — the three ceilings, so an offer sheet can apply the one
+      // that belongs to this player rather than the highest of them.
+      maxSalary0to6: context.maxSalary0to6,
+      maxSalary7to9: context.maxSalary7to9,
+      maxSalary10Plus: context.maxSalary10Plus,
       committed: context.committed,
-      capSpace:
-        context.salaryCap > 0 ? context.salaryCap - context.committed : null,
+      capSpace: roomUnder(context.salaryCap),
+      luxuryTax: context.luxuryTax,
+      luxuryTaxRoom: roomUnder(context.luxuryTax),
+      firstApron: context.firstApron,
+      firstApronRoom: roomUnder(context.firstApron),
+      secondApron: context.secondApron,
+      secondApronRoom: roomUnder(context.secondApron),
+      tier: context.tier,
+      tierLabel: context.tierLabel,
+      exceptions: context.exceptions,
       rosterCount: context.rosterCount,
       maxRosterSize: context.maxRosterSize,
+      rosterSpotsFree: Math.max(0, context.maxRosterSize - context.rosterCount),
       twoWayCount: context.twoWayCount,
       maxTwoWay: context.maxTwoWay,
       hardCapEnabled: context.hardCapEnabled,
@@ -706,8 +802,6 @@ export class FreeAgencyService {
     teamId: number,
     league: Awaited<ReturnType<FreeAgencyService['leagueState']>>,
   ) {
-    const salaryCap = league.settings?.salaryCap ?? 0;
-
     const [years, dead, holds, roster] = await Promise.all([
       this.prisma.contractYear.findMany({
         where: {
@@ -744,8 +838,51 @@ export class FreeAgencyService {
       ? this.thresholdFor(effective, league.settings.hardCapThreshold)
       : null;
 
+    // Rule 3.4 — every line is read against where the team lands, which on
+    // this screen is where it stands before it offers anything.
+    const tier = tierFor(committed, effective);
+    const tools = toolsFor(tier, false);
+
     return {
-      salaryCap,
+      // Article 2 — the league year's own figure. `LeagueSettings.salaryCap`
+      // is the column Article 2 replaced and is 0 on every league, which is
+      // why this page showed a dash where the cap belonged.
+      salaryCap: effective.salaryCap,
+      capIsSet: effective.isSet,
+      luxuryTax: effective.luxuryTax,
+      firstApron: effective.firstApron,
+      secondApron: effective.secondApron,
+      tier,
+      tierLabel: TIER_LABEL[tier],
+      // Article 6 — what this payroll may still sign with, and for how much.
+      // Nothing is deducted for an exception already spent this year: the
+      // ledger for that is Article 9, which is not built.
+      exceptions: [
+        {
+          key: 'nonTaxpayerMle',
+          label: 'Non-Taxpayer MLE',
+          amount: effective.nonTaxpayerMle,
+          available: tools.canUseNonTaxpayerMle,
+        },
+        {
+          key: 'taxpayerMle',
+          label: 'Taxpayer MLE',
+          amount: effective.taxpayerMle,
+          available: tools.canUseTaxpayerMle,
+        },
+        {
+          key: 'biAnnual',
+          label: 'Bi-Annual Exception',
+          amount: effective.biAnnualException,
+          available: tools.canUseBiAnnual,
+        },
+        {
+          key: 'roomException',
+          label: 'Room Exception',
+          amount: effective.roomException,
+          available: tools.canUseRoomException,
+        },
+      ],
       minPlayerSalary: league.settings?.minPlayerSalary ?? 0,
       // Rule 10.2 — the maximum depends on years of service. Until a
       // signing knows whose it is, the screen budgets against the highest of
@@ -786,7 +923,12 @@ export class FreeAgencyService {
     return null;
   }
 
-  private toOffer(row: OfferRow) {
+  private toOffer(
+    row: OfferRow,
+    competingOffers = 0,
+    /** His season line, where the caller has fetched one. */
+    line: SeasonAverage | null = null,
+  ) {
     const terms: OfferTerms = {
       years: row.years,
       firstYearSalary: row.firstYearSalary,
@@ -804,6 +946,7 @@ export class FreeAgencyService {
       raisePct: row.raisePct,
       contractType: row.contractType,
       signedVia: row.signedVia,
+      rank: row.rank,
       totalValue: offerTotalValue(terms),
       // The per-season figures the offer works out to, so the screen never has
       // to repeat the raise arithmetic and get a different answer.
@@ -817,6 +960,7 @@ export class FreeAgencyService {
       guaranteedAmounts: row.guaranteedAmounts,
       checks,
       isLegal: offerIsLegal(checks),
+      competingOffers,
       expiresAt: row.expiresAt,
       respondedAt: row.respondedAt,
       createdAt: row.createdAt,
@@ -827,9 +971,27 @@ export class FreeAgencyService {
         id: row.leaguePlayer.player.id,
         name: row.leaguePlayer.player.name,
         position: row.leaguePlayer.player.position,
+        headshot: row.leaguePlayer.player.headshot,
         birdYears: row.leaguePlayer.birdYears,
         status: row.leaguePlayer.status,
         currentTeam: row.leaguePlayer.team,
+        // The card carries the same line the board shows, so an owner can
+        // judge an offer without leaving the page he made it on.
+        age: line?.age ?? null,
+        stats: line
+          ? {
+              gamesPlayed: line.gamesPlayed,
+              pts: line.pts,
+              reb: line.reb,
+              ast: line.ast,
+              stl: line.stl,
+              blk: line.blk,
+              to: line.to,
+              threes: line.threes,
+              fgPct: line.fgPct,
+              ftPct: line.ftPct,
+            }
+          : null,
       },
     };
   }

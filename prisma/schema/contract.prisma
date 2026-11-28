@@ -20,6 +20,12 @@ model LeaguePlayer {
   birdYears Int                @default(0)
   slotType  RosterSlotType     @default(standard)
 
+  // Rule 9.1 — bird years are earned under one team and survive the player
+  // leaving it, so who holds them is not always who rosters him. Kept apart
+  // from `teamId`, which is null the moment he becomes a free agent and
+  // would otherwise throw the rights away with the contract.
+  birdRightsTeamId Int?
+
   // Appendix B item 6 — the commissioner marks who may reach the higher
   // ceilings. Rule 10.3's supermax (35% of the cap) and Rule 10.8's 30%
   // rookie-scale extension are separate decisions, so they are separate
@@ -39,6 +45,7 @@ model LeaguePlayer {
   league          League            @relation(fields: [leagueId], references: [id], onDelete: Cascade)
   player          Player            @relation(fields: [playerId], references: [id], onDelete: Restrict)
   team            Team?             @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  birdRightsTeam  Team?             @relation("birdRights", fields: [birdRightsTeamId], references: [id], onDelete: SetNull)
   contracts       Contract[]
   capHolds        CapHold[]
   faOffers        FreeAgencyOffer[]

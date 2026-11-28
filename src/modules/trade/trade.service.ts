@@ -38,6 +38,7 @@ import {
   checkTrade,
   committedAfter,
   exceptionFor,
+  exceptionSpend,
   rosterAfter,
   shortTeamName,
   TIER_LABEL,
@@ -104,6 +105,9 @@ const TRADE_SELECT = {
         select: {
           id: true,
           tradeAcquiredAt: true,
+          // Rule 4.9 — a two-way player holds no standard roster spot, so
+          // every re-judge of a trade has to know which kind he is.
+          slotType: true,
           player: { select: { id: true, name: true, position: true } },
         },
       },
@@ -180,6 +184,8 @@ export class TradeService {
           leaguePlayerId: asset.leaguePlayer?.id ?? null,
           playerName: asset.leaguePlayer?.player.name ?? null,
           tradeAcquiredAt: asset.leaguePlayer?.tradeAcquiredAt ?? null,
+          slotType: asset.leaguePlayer?.slotType ?? null,
+          tradeExceptionId: asset.tradeException?.id ?? null,
         })),
         league,
       );
@@ -229,7 +235,7 @@ export class TradeService {
     );
 
     const league = await this.leagueState(leagueId);
-    const assets = await this.resolveAssets(leagueId, payload);
+    const assets = await this.resolveAssets(leagueId, payload, league);
     const sides = await this.buildSides(leagueId, teams, assets, league);
 
     const checks = checkTrade(sides, {
@@ -376,7 +382,7 @@ export class TradeService {
     await this.assertMayPropose(leagueId, teamIds, userId);
 
     const league = await this.leagueState(leagueId);
-    const assets = await this.resolveAssets(leagueId, payload);
+    const assets = await this.resolveAssets(leagueId, payload, league);
     const sides = await this.buildSides(leagueId, teams, assets, league);
 
     return this.judge(sides, teams, league);
@@ -758,6 +764,7 @@ export class TradeService {
       playerName: asset.leaguePlayer?.player.name ?? null,
       tradeAcquiredAt: asset.leaguePlayer?.tradeAcquiredAt ?? null,
       slotType: asset.leaguePlayer?.slotType ?? null,
+      tradeExceptionId: asset.tradeExceptionId,
     }));
 
     const sidesBefore = await this.buildSides(
@@ -777,7 +784,7 @@ export class TradeService {
     // in particular blocks every move that would leave a team over its hard
     // cap, so the ceiling has to be measured against the rosters as they are
     // now.
-    const finalChecks = checkTrade(sidesBefore, {
+    const ruleContext = {
       cap: league.cap,
       salaryMatching: league.salaryMatching,
       apronRules: league.apronRules,
@@ -785,7 +792,8 @@ export class TradeService {
       deadlineLabel: league.deadlineLabel,
       rosterMinimum: league.rosterMinimum,
       rookieMinimum: league.rookieMinimum,
-    });
+    };
+    const finalChecks = checkTrade(sidesBefore, ruleContext);
 
     if (!tradeIsLegal(finalChecks)) {
       const blocking = blockingChecks(finalChecks);
@@ -845,10 +853,11 @@ export class TradeService {
 
         if (
           asset.kind === TradeAssetKind.tradeException &&
-          asset.tradeExceptionId
+          asset.tradeExceptionId &&
+          asset.toTeamId !== asset.fromTeamId
         ) {
-          // An exception does not split when it moves; the whole thing
-          // changes hands.
+          // Rule 7.5 — an exception does not split when it is traded; the
+          // whole remaining balance changes hands.
           await tx.tradeException.update({
             where: { id: asset.tradeExceptionId },
             data: { teamId: asset.toTeamId },
@@ -885,6 +894,20 @@ export class TradeService {
               tradeId: trade.id,
               reason: `Trade #${trade.id}`,
             },
+          });
+        }
+      }
+
+      // Rule 7.4 — what an exception absorbed comes off its balance, and an
+      // exception with nothing left is retired rather than deleted, so the
+      // trade that spent it still has something to point at.
+      for (const side of sidesBefore) {
+        for (const spent of exceptionSpend(side, ruleContext)) {
+          const row = side.exceptions.find((one) => one.id === spent.id);
+          const left = Math.max(0, (row?.remaining ?? 0) - spent.absorbed);
+          await tx.tradeException.update({
+            where: { id: spent.id },
+            data: { remaining: left, isActive: left > 0 },
           });
         }
       }
@@ -1013,6 +1036,9 @@ export class TradeService {
         label: true,
         amount: true,
         remaining: true,
+        // Rule 7.3 — one year from creation, so the contracts page can say
+        // both when it was earned and how long is left on it.
+        createdAt: true,
         expiresAt: true,
         team: { select: { id: true, name: true, abbr: true } },
       },
@@ -1129,7 +1155,11 @@ export class TradeService {
     return { id: existing.id, isActive: false };
   }
 
-  private async resolveAssets(leagueId: number, payload: ProposeTradeDto) {
+  private async resolveAssets(
+    leagueId: number,
+    payload: ProposeTradeDto,
+    league: Awaited<ReturnType<TradeService['leagueState']>>,
+  ) {
     const seasonStartYear = (await this.leagueState(leagueId)).seasonStartYear;
     const resolved: {
       kind: TradeAssetKind;
@@ -1303,6 +1333,20 @@ export class TradeService {
         );
       }
 
+      // Rule 7.4 against Rule 7.5. An exception kept by its holder is being
+      // used to absorb salary; one pointed at another team is being traded,
+      // which is a commissioner setting and off in some leagues. The two are
+      // told apart by where the asset lands, so neither needs a flag.
+      if (
+        asset.toTeamId !== asset.fromTeamId &&
+        !league.allowTradingTradeExceptions
+      ) {
+        throw new AppError(
+          HttpStatus.BAD_REQUEST,
+          'This league does not allow trade exceptions to be traded. A team can still use its own to take a player in.',
+        );
+      }
+
       resolved.push({
         kind: TradeAssetKind.tradeException,
         fromTeamId: asset.fromTeamId,
@@ -1407,10 +1451,36 @@ export class TradeService {
       playerName?: string | null;
       tradeAcquiredAt?: Date | null;
       slotType?: RosterSlotType | null;
+      tradeExceptionId?: number | null;
     }[],
     league: Awaited<ReturnType<TradeService['leagueState']>>,
   ): Promise<TradeSide[]> {
     const sides: TradeSide[] = [];
+
+    // Article 7 — an exception a team keeps is one it is using to absorb
+    // salary; one going to another team is being traded away (Rule 7.5) and
+    // leaves no room behind. Only the first kind reaches the rules.
+    const usedExceptionIds = assets
+      .filter(
+        (asset) =>
+          asset.kind === TradeAssetKind.tradeException &&
+          asset.tradeExceptionId &&
+          asset.fromTeamId === asset.toTeamId,
+      )
+      .map((asset) => asset.tradeExceptionId as number);
+
+    const exceptionRows =
+      usedExceptionIds.length === 0
+        ? []
+        : await this.prisma.tradeException.findMany({
+            where: { id: { in: usedExceptionIds }, leagueId, isActive: true },
+            select: {
+              id: true,
+              teamId: true,
+              label: true,
+              remaining: true,
+            },
+          });
 
     // One query for the whole trade: a hard cap is read for every side, and
     // three teams would otherwise be three round trips.
@@ -1501,6 +1571,13 @@ export class TradeService {
         // 11-cba-spec.md rather than guessed at.
         isRepeatTaxpayer: false,
         hardCap: hardCaps.get(team.id) ?? null,
+        exceptions: exceptionRows
+          .filter((row) => row.teamId === team.id)
+          .map((row) => ({
+            id: row.id,
+            label: row.label,
+            remaining: row.remaining,
+          })),
       });
     }
 
@@ -1543,6 +1620,10 @@ export class TradeService {
       salaryMatching: league.settings?.salaryMatching ?? false,
       apronRules: league.settings?.apronRules ?? false,
       allowTradeExceptions: league.settings?.allowTradeExceptions ?? false,
+      // Rule 7.5 — whether an exception may itself change hands, which is a
+      // separate permission from being allowed to use one.
+      allowTradingTradeExceptions:
+        league.settings?.allowTradingTradeExceptions ?? false,
       commissionerTradeApproval:
         league.settings?.commissionerTradeApproval ?? false,
       // No trade date on the calendar means no deadline to be past.

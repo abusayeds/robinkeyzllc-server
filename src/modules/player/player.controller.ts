@@ -54,7 +54,8 @@ export class PlayerController {
       'attachment; filename="player-birthdates.csv"',
     );
     // Header only. An example row in a template gets imported by accident.
-    res.send('player,birthdate\n');
+    // Experience is optional: a file may carry either column, or both.
+    res.send('player,birthdate,experience\n');
   }
 
   @Post('birthdates')

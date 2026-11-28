@@ -484,6 +484,9 @@ export class LeagueService {
         commissionerTradeApproval: settings.commissionerTradeApproval,
       },
       salaryCap: cap.salaryCap,
+      // Article 2 — the rate future league years are projected at, which is
+      // the commissioner's to set and not the CBA's.
+      capGrowthPct: settings.capGrowthPct,
       minPlayerSalary: settings.minPlayerSalary,
       hardCapEnabled: settings.hardCapEnabled,
       hardCapThreshold: settings.hardCapThreshold,

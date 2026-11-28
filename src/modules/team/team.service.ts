@@ -69,10 +69,13 @@ export class TeamService {
       );
     }
 
-    // Conferences alternate as teams are added, so a league ends up balanced
-    // without the commissioner having to think about it. Moving a team
-    // afterwards is a normal edit.
-    const conference = existing % 2 === 0 ? Conference.east : Conference.west;
+    // The commissioner's choice wins. Where the form did not make one,
+    // conferences alternate as teams are added, so a league ends up balanced
+    // without anyone having to think about it. Moving a team afterwards is a
+    // normal edit either way.
+    const conference =
+      payload.conference ??
+      (existing % 2 === 0 ? Conference.east : Conference.west);
 
     const team = await this.write(() =>
       this.prisma.team.create({
@@ -83,6 +86,7 @@ export class TeamService {
           color: payload.color ?? undefined,
           logo: payload.logo?.trim() || null,
           conference,
+          division: payload.division?.trim() || null,
         },
         include: { members: HOLDER_SELECT },
       }),
@@ -273,7 +277,17 @@ export class TeamService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
-        const target = String(error.meta?.target ?? '');
+        // Prisma reports the violated constraint as a list of column names,
+        // and older versions as a single string. Joining the one and taking
+        // the other keeps both readable; anything else stringifies to
+        // "[object Object]" and matches nothing.
+        const meta: unknown = error.meta?.target;
+        const target = Array.isArray(meta)
+          ? meta.join(',')
+          : typeof meta === 'string'
+            ? meta
+            : '';
+
         if (target.includes('abbr')) {
           throw new AppError(
             HttpStatus.CONFLICT,

@@ -7,6 +7,13 @@ export type BirthdateRow = {
   rawBirthdate: string;
   /** Midnight UTC on the stated day, or null when the cell could not be read. */
   birthdate: Date | null;
+  /**
+   * Years of service, where the file carries a column for it. Optional, and
+   * separate from the birthdate: a file may correct either, both, or carry
+   * only the column it has.
+   */
+  rawExperience: string;
+  experience: number | null;
   issue: string | null;
 };
 
@@ -21,6 +28,16 @@ export type ReadBirthdateFileResult = {
 /** Both spellings of each column, because a spreadsheet is typed by hand. */
 const PLAYER_HEADERS = ['player', 'player_name', 'name'];
 const BIRTHDATE_HEADERS = ['birthdate', 'birth_date', 'dob', 'date_of_birth'];
+const EXPERIENCE_HEADERS = [
+  'experience',
+  'exp',
+  'years_of_service',
+  'service_years',
+  'yos',
+];
+
+/** Nobody has played more than about 23 seasons; 30 is room to spare. */
+const MAX_EXPERIENCE = 30;
 
 /** Nobody playing today was born before this, and nobody is born later than today. */
 const EARLIEST_YEAR = 1900;
@@ -77,7 +94,39 @@ export function parseBirthdate(raw: string | null | undefined): {
 }
 
 /**
- * Reads the two-column birthdate file.
+ * Reads one experience cell.
+ *
+ * Blank is a real answer and not an error: a file may carry the column for
+ * some players and leave it empty for the rest, and a row with a birthdate
+ * and no experience is still worth importing.
+ */
+export function parseExperience(raw: string | null | undefined): {
+  experience: number | null;
+  issue: string | null;
+} {
+  const cleaned = (raw ?? '').trim();
+  if (!cleaned) return { experience: null, issue: null };
+
+  if (!/^\d{1,2}$/.test(cleaned)) {
+    return {
+      experience: null,
+      issue: `"${cleaned}" is not a whole number of seasons.`,
+    };
+  }
+
+  const value = Number(cleaned);
+  if (value > MAX_EXPERIENCE) {
+    return {
+      experience: null,
+      issue: `${cleaned} seasons is more than anyone has played.`,
+    };
+  }
+
+  return { experience: value, issue: null };
+}
+
+/**
+ * Reads the birthdate file.
  *
  * Deliberately separate from the roster import: this one is global, a Super
  * Admin loads it once for every player in the platform, and it carries no
@@ -94,6 +143,7 @@ export function readBirthdateFile(text: string): ReadBirthdateFileResult {
 
   let playerAt: number | null = null;
   let birthdateAt: number | null = null;
+  let experienceAt: number | null = null;
 
   grid[0].forEach((raw, index) => {
     const key = headerKey(raw);
@@ -115,33 +165,74 @@ export function readBirthdateFile(text: string): ReadBirthdateFileResult {
       birthdateAt = index;
       return;
     }
+    if (EXPERIENCE_HEADERS.includes(key)) {
+      if (experienceAt !== null) {
+        fileIssues.push('The experience column appears more than once.');
+        return;
+      }
+      experienceAt = index;
+      return;
+    }
 
     ignoredColumns.push(raw.trim());
   });
 
   if (playerAt === null) fileIssues.push('The "player" column is missing.');
-  if (birthdateAt === null) {
-    fileIssues.push('The "birthdate" column is missing.');
+  // Either column on its own is a usable file: one that only carries
+  // experience is the whole point of allowing it here.
+  if (birthdateAt === null && experienceAt === null) {
+    fileIssues.push(
+      'The file needs a "birthdate" column, an "experience" column, or both.',
+    );
   }
 
-  if (fileIssues.length > 0 || playerAt === null || birthdateAt === null) {
+  if (fileIssues.length > 0 || playerAt === null) {
     return { rows: [], fileIssues, ignoredColumns };
   }
 
   const playerIndex: number = playerAt;
-  const birthdateIndex: number = birthdateAt;
+  const birthdateIndex: number | null = birthdateAt;
+  const experienceIndex: number | null = experienceAt;
 
   const rows = grid.slice(1).map((line, offset) => {
     const player = (line[playerIndex] ?? '').trim();
-    const rawBirthdate = (line[birthdateIndex] ?? '').trim();
-    const parsed = parseBirthdate(rawBirthdate);
+
+    const rawBirthdate =
+      birthdateIndex === null ? '' : (line[birthdateIndex] ?? '').trim();
+    const rawExperience =
+      experienceIndex === null ? '' : (line[experienceIndex] ?? '').trim();
+
+    // A blank birthdate is only a problem in a file that has the column and
+    // nothing else to offer for that row.
+    const date =
+      birthdateIndex === null
+        ? { birthdate: null, issue: null }
+        : rawBirthdate === '' && rawExperience !== ''
+          ? { birthdate: null, issue: null }
+          : parseBirthdate(rawBirthdate);
+
+    const years = parseExperience(rawExperience);
+
+    const empty =
+      date.birthdate === null &&
+      years.experience === null &&
+      date.issue === null &&
+      years.issue === null;
 
     return {
       lineNumber: offset + 2,
       player,
       rawBirthdate,
-      birthdate: parsed.birthdate,
-      issue: player ? parsed.issue : 'Player is required.',
+      birthdate: date.birthdate,
+      rawExperience,
+      experience: years.experience,
+      issue: !player
+        ? 'Player is required.'
+        : (date.issue ??
+          years.issue ??
+          (empty
+            ? 'This row gives neither a birthdate nor experience.'
+            : null)),
     } satisfies BirthdateRow;
   });
 

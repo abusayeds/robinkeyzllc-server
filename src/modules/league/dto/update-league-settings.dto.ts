@@ -8,6 +8,7 @@ import {
   IsBoolean,
   IsEnum,
   IsInt,
+  IsNumber,
   IsOptional,
   Max,
   Min,
@@ -57,6 +58,19 @@ export class UpdateLeagueSettingsDto {
   @IsOptional()
   @IsBoolean()
   commissionerTradeApproval?: boolean;
+
+  /**
+   * How much the cap is assumed to grow each league year nobody has entered
+   * figures for, as a whole percent. Capped at 25: a projection beyond that
+   * is not a forecast, and a typo of 700 would draw a contracts page nobody
+   * can read.
+   */
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(25)
+  capGrowthPct?: number;
 
   @IsOptional()
   @Type(() => Number)
